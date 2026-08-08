@@ -3,9 +3,13 @@ import type {
   AppError,
   Article,
   ArticleListItem,
+  BackupOverview,
+  BackupPreview,
+  BackupResult,
   Category,
   SaveArticleInput,
   SearchArticlesInput,
+  RestoreResult,
   SystemInfo,
 } from "../types/domain";
 
@@ -57,4 +61,11 @@ export const knowledgeApi = {
     call<ArticleListItem[]>("search_articles", { input }),
   getArticle: (id: string) => call<Article>("get_article", { id }),
   saveArticle: (input: SaveArticleInput) => call<Article>("save_article", { input }),
+  getBackupOverview: () => call<BackupOverview>("get_backup_overview"),
+  createFullBackup: (destinationPath: string, displayName: string, overwrite = false) =>
+    call<BackupResult>("create_full_backup", {
+      input: { destinationPath, displayName, overwrite },
+    }),
+  inspectBackup: (path: string) => call<BackupPreview>("inspect_backup", { path }),
+  restoreBackup: (path: string) => call<RestoreResult>("restore_backup", { path }),
 };

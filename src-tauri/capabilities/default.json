@@ -3,5 +3,5 @@
   "identifier": "main-capability",
   "description": "KnowledgeAppのメイン画面に必要な最小権限",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "dialog:allow-open", "dialog:allow-save"]
 }

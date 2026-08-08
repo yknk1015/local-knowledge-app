@@ -1,14 +1,17 @@
+use std::path::PathBuf;
+
 use tauri::State;
 
 use crate::{
     AppState,
     errors::{AppError, AppResult},
     models::{
-        Article, ArticleListItem, Category, CreateCategoryInput, SaveArticleInput,
+        Article, ArticleListItem, BackupOverview, BackupPreview, BackupResult, Category,
+        CreateCategoryInput, CreateFullBackupInput, RestoreResult, SaveArticleInput,
         SearchArticlesInput, SystemInfo,
     },
     repositories::database::ArticleRecord,
-    services::rich_content,
+    services::{backup, rich_content},
 };
 
 fn lock_database<'state, 'managed>(
@@ -76,6 +79,38 @@ pub fn save_article(input: SaveArticleInput, state: State<'_, AppState>) -> AppR
         status: &input.status,
         importance: input.importance,
     })
+}
+
+#[tauri::command]
+pub fn create_full_backup(
+    input: CreateFullBackupInput,
+    state: State<'_, AppState>,
+) -> AppResult<BackupResult> {
+    let database = lock_database(&state)?;
+    backup::create_full_backup(
+        &state.data_root,
+        &database,
+        &PathBuf::from(input.destination_path),
+        &input.display_name,
+        input.overwrite,
+    )
+}
+
+#[tauri::command]
+pub fn get_backup_overview(state: State<'_, AppState>) -> AppResult<BackupOverview> {
+    let database = lock_database(&state)?;
+    backup::backup_overview(&state.data_root, &database)
+}
+
+#[tauri::command]
+pub fn inspect_backup(path: String, state: State<'_, AppState>) -> AppResult<BackupPreview> {
+    backup::inspect_backup(&state.data_root, &PathBuf::from(path))
+}
+
+#[tauri::command]
+pub fn restore_backup(path: String, state: State<'_, AppState>) -> AppResult<RestoreResult> {
+    let mut database = lock_database(&state)?;
+    backup::restore_backup(&state.data_root, &mut database, &PathBuf::from(path))
 }
 
 fn validate_article_fields(input: &SaveArticleInput) -> AppResult<()> {

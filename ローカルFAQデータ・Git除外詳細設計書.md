@@ -5,9 +5,9 @@
 | 項目 | 内容 |
 |---|---|
 | 文書名 | ローカルFAQデータ・Git除外詳細設計書 |
-| 版 | 0.2（初回実装反映版） |
+| 版 | 0.3（フルバックアップ保存・復元反映版） |
 | 作成日 | 2026-08-08 |
-| 上位文書 | `FAQシステム要件定義書.md` v0.5、`FAQシステム基本設計書.md` v0.6 |
+| 上位文書 | `FAQシステム要件定義書.md` v0.5、`FAQシステム基本設計書.md` v0.7 |
 | 対象 | 利用者が作成したFAQデータをGitHub等へ含めないための保存・検査設計 |
 
 ## 2. 目的
@@ -77,6 +77,7 @@ C:\Users\{Windowsユーザー}\AppData\Local\jp.local.webknowledgesystem\
 ├─ manuals/
 ├─ logs/
 ├─ restore-staging/
+├─ safety-backups/
 ├─ settings/
 └─ temp/
 ```
@@ -88,6 +89,7 @@ C:\Users\{Windowsユーザー}\AppData\Local\jp.local.webknowledgesystem\
 | `manuals` | 取り込んだHTML手順書、CSS、画像 |
 | `logs` | 診断ログ |
 | `restore-staging` | 復元中の一時展開 |
+| `safety-backups` | 復元直前に自動作成するローカル安全バックアップ |
 | `settings` | DB外の端末設定 |
 | `temp` | FAQ保存前の一時画像など |
 
@@ -145,7 +147,7 @@ Rustバックエンドに`DataRootService`を置き、アプリ起動時に一�
 | SQLite | `*.db`、`*.db-*`、`*.sqlite*` |
 | フルバックアップ | `*.faqbackup`、`*.faqbackup.*` |
 | JSONエクスポート | `*.knowledge-export.json` |
-| 作成途中 | `*.partial`、`/restore-staging/`、`/tmp/` |
+| 作成途中・復元退避 | `*.partial`、`/restore-staging/`、`/safety-backups/`、`/tmp/` |
 | ローカル設定 | `.env`、`.env.*`、`/settings/local/` |
 | ビルド成果物 | `/node_modules/`、`/dist/`、`/src-tauri/target/` |
 | ローカル検討資料 | `/2026.08.08_ChatGPTとの会話.txt` |
@@ -191,7 +193,7 @@ scripts/check-no-runtime-data.ps1
 ルート相対パスで次を拒否する。
 
 ```text
-^(data|attachments|manuals|backup|backups|exports|logs|restore-staging|tmp)/
+^(data|attachments|manuals|backup|backups|exports|logs|restore-staging|safety-backups|tmp)/
 ```
 
 場所にかかわらず次を拒否する。
@@ -272,8 +274,9 @@ Tauriの`bundle.resources`は、ソースに含まれる静的リソースだけ
 - フルバックアップは利用者が選択した保存先へ作成する。
 - JSONエクスポートは`.knowledge-export.json`を使用する。
 - 保存先の初期値をGitリポジトリやアプリのインストールフォルダにしない。
-- 開発実行時、選択された保存先がGitリポジトリ配下と判定できる場合は警告する。
+- 開発実行・通常実行を問わず、選択された保存先がGitリポジトリ配下と判定できる場合は保存を拒否し、別の保存先を案内する。
 - リポジトリ配下へ誤保存しても、`.gitignore`と検査スクリプトがGit登録を防ぐ。
+- 復元前の安全バックアップは利用者データルート内の`safety-backups`へ作成し、フルバックアップへ再帰的に含めない。
 
 ## 11. Git開始時の確認
 
@@ -344,6 +347,8 @@ GitHub等へpushした場合、通常の削除コミットだけでは履歴に�
 | 空DB作成 | 完了 | Windows実行ファイルを起動し、利用者別フォルダへの作成を確認した。 |
 | 最小FAQ保存 | 完了 | OS一時フォルダを使うDB結合テストで、保存、再オープン、一覧取得を確認した。 |
 | リリース混入検査 | 完了 | リリースビルド後のフォルダにDB、バックアップ、エクスポートがないことを確認した。 |
+| フルバックアップ | 完了 | OS一時フォルダの検証データで、SQLiteスナップショット、ZIP梱包、SHA-256検証、任意保存先への確定を確認した。 |
+| 復元 | 完了 | 破損ファイル拒否、復元前安全バックアップ、DB・設定・添付ファイル復元を確認した。 |
 
 ## 15. 設計変更時のルール
 
@@ -360,7 +365,7 @@ GitHub等へpushした場合、通常の削除コミットだけでは履歴に�
 
 - `AGENTS.md`
 - `FAQシステム要件定義書.md` v0.5
-- `FAQシステム基本設計書.md` v0.6
+- `FAQシステム基本設計書.md` v0.7
 - [Tauri 2：appLocalDataDir](https://v2.tauri.app/reference/javascript/api/namespacepath/#applocaldatadir)
 - [Tauri 2：ファイルシステム](https://v2.tauri.app/plugin/file-system/)
 - [Git：gitignore](https://git-scm.com/docs/gitignore)

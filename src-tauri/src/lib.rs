@@ -17,6 +17,7 @@ pub struct AppState {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let app_data_dir = app.path().app_local_data_dir().map_err(|_| {
                 errors::AppError::system("利用者データの保存先を取得できませんでした。")
@@ -37,6 +38,10 @@ pub fn run() {
             commands::get_article,
             commands::search_articles,
             commands::save_article,
+            commands::create_full_backup,
+            commands::get_backup_overview,
+            commands::inspect_backup,
+            commands::restore_backup,
         ])
         .run(tauri::generate_context!())
         .expect("KnowledgeAppの起動に失敗しました");

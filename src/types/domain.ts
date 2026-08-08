@@ -48,6 +48,45 @@ export interface SystemInfo {
   databasePath: string;
 }
 
+export interface BackupCounts {
+  articles: number;
+  categories: number;
+  attachments: number;
+  manuals: number;
+}
+
+export interface BackupOverview {
+  estimatedBytes: number;
+  counts: BackupCounts;
+  defaultDirectory: string | null;
+}
+
+export interface BackupPreview {
+  sourcePath: string;
+  displayName: string;
+  createdAt: string;
+  appVersion: string;
+  schemaVersion: number;
+  backupFormatVersion: number;
+  totalBytes: number;
+  counts: BackupCounts;
+}
+
+export interface BackupResult {
+  destinationPath: string;
+  displayName: string;
+  createdAt: string;
+  totalBytes: number;
+  counts: BackupCounts;
+}
+
+export interface RestoreResult {
+  sourcePath: string;
+  safetyBackupPath: string;
+  restoredAt: string;
+  counts: BackupCounts;
+}
+
 export interface AppError {
   code: string;
   message: string;

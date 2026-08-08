@@ -1,14 +1,14 @@
 use std::{path::Path, time::Duration};
 
 use chrono::Utc;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, backup::Backup, params};
 use serde_json::Value;
 use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 
 use crate::{
     errors::{AppError, AppResult},
-    models::{Article, ArticleListItem, Category, SearchArticlesInput},
+    models::{Article, ArticleListItem, BackupCounts, Category, SearchArticlesInput},
 };
 
 const INITIAL_MIGRATION: &str = include_str!("../../migrations/0001_initial.sql");
@@ -44,6 +44,127 @@ impl Database {
             .execute_batch(INITIAL_MIGRATION)
             .map_err(|_| AppError::database("データベースの初期設定に失敗しました。"))?;
         Ok(Self { connection })
+    }
+
+    pub fn backup_to(&self, destination: &Path) -> AppResult<()> {
+        let mut destination_connection = Connection::open(destination).map_err(|_| {
+            AppError::database("バックアップ用データベースを作成できませんでした。")
+        })?;
+        let backup = Backup::new(&self.connection, &mut destination_connection).map_err(|_| {
+            AppError::database("データベースのバックアップを開始できませんでした。")
+        })?;
+        backup
+            .run_to_completion(128, Duration::from_millis(10), None)
+            .map_err(|_| {
+                AppError::database("データベースのバックアップを完了できませんでした。")
+            })?;
+        Ok(())
+    }
+
+    pub fn restore_from(&mut self, source: &Path) -> AppResult<()> {
+        Self::validate_snapshot(source)?;
+        let source_connection =
+            Connection::open_with_flags(source, OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .map_err(|_| AppError::database("復元するデータベースを開けませんでした。"))?;
+        let backup = Backup::new(&source_connection, &mut self.connection)
+            .map_err(|_| AppError::database("データベースの復元を開始できませんでした。"))?;
+        backup
+            .run_to_completion(128, Duration::from_millis(10), None)
+            .map_err(|_| AppError::database("データベースの復元を完了できませんでした。"))?;
+        drop(backup);
+        self.connection
+            .execute_batch("PRAGMA foreign_keys = ON;\nPRAGMA journal_mode = WAL;\nPRAGMA synchronous = NORMAL;")
+            .map_err(AppError::from)?;
+        self.quick_check()
+    }
+
+    pub fn validate_snapshot(path: &Path) -> AppResult<()> {
+        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|_| {
+                AppError::new(
+                    "BK-006",
+                    "バックアップ内のデータベースを開けませんでした。",
+                    "別のバックアップファイルを選択してください。",
+                )
+            })?;
+        let check: String = connection
+            .query_row("PRAGMA quick_check", [], |row| row.get(0))
+            .map_err(|_| {
+                AppError::new(
+                    "BK-006",
+                    "バックアップ内のデータベースを検査できませんでした。",
+                    "別のバックアップファイルを選択してください。",
+                )
+            })?;
+        if check != "ok" {
+            return Err(AppError::new(
+                "BK-006",
+                "バックアップ内のデータベースが破損しています。",
+                "別のバックアップファイルを選択してください。",
+            ));
+        }
+        let required_tables: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('schema_migrations', 'categories', 'articles')",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(AppError::from)?;
+        if required_tables != 3 {
+            return Err(AppError::new(
+                "BK-007",
+                "このファイルはKnowledgeAppのバックアップではありません。",
+                "拡張子が.faqbackupの正しいファイルを選択してください。",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn schema_version(&self) -> AppResult<i64> {
+        self.connection
+            .query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(AppError::from)
+    }
+
+    pub fn backup_counts(&self) -> AppResult<BackupCounts> {
+        self.connection
+            .query_row(
+                r#"
+                SELECT
+                    (SELECT COUNT(*) FROM articles WHERE deleted_at IS NULL),
+                    (SELECT COUNT(*) FROM categories),
+                    (SELECT COUNT(*) FROM article_attachments),
+                    (SELECT COUNT(*) FROM manuals)
+                "#,
+                [],
+                |row| {
+                    Ok(BackupCounts {
+                        articles: row.get(0)?,
+                        categories: row.get(1)?,
+                        attachments: row.get(2)?,
+                        manuals: row.get(3)?,
+                    })
+                },
+            )
+            .map_err(AppError::from)
+    }
+
+    fn quick_check(&self) -> AppResult<()> {
+        let check: String = self
+            .connection
+            .query_row("PRAGMA quick_check", [], |row| row.get(0))
+            .map_err(AppError::from)?;
+        if check == "ok" {
+            Ok(())
+        } else {
+            Err(AppError::database(
+                "データベースの整合性確認に失敗しました。",
+            ))
+        }
     }
 
     pub fn list_categories(&self) -> AppResult<Vec<Category>> {

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Category {
     pub id: String,
@@ -74,4 +74,61 @@ pub struct SystemInfo {
     pub app_version: String,
     pub data_root: String,
     pub database_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateFullBackupInput {
+    pub destination_path: String,
+    pub display_name: String,
+    pub overwrite: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupCounts {
+    pub articles: i64,
+    pub categories: i64,
+    pub attachments: i64,
+    pub manuals: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupOverview {
+    pub estimated_bytes: u64,
+    pub counts: BackupCounts,
+    pub default_directory: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupPreview {
+    pub source_path: String,
+    pub display_name: String,
+    pub created_at: String,
+    pub app_version: String,
+    pub schema_version: i64,
+    pub backup_format_version: u32,
+    pub total_bytes: u64,
+    pub counts: BackupCounts,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupResult {
+    pub destination_path: String,
+    pub display_name: String,
+    pub created_at: String,
+    pub total_bytes: u64,
+    pub counts: BackupCounts,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreResult {
+    pub source_path: String,
+    pub safety_backup_path: String,
+    pub restored_at: String,
+    pub counts: BackupCounts,
 }

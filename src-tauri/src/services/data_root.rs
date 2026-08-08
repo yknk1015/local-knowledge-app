@@ -13,6 +13,7 @@ const MANAGED_DIRECTORIES: &[&str] = &[
     "manuals",
     "logs",
     "restore-staging",
+    "safety-backups",
     "settings",
     "temp",
 ];
@@ -83,6 +84,30 @@ impl DataRootService {
 
     pub fn database_path(&self) -> PathBuf {
         self.root.join("data").join("knowledge.db")
+    }
+
+    pub fn attachments_path(&self) -> PathBuf {
+        self.root.join("attachments").join("articles")
+    }
+
+    pub fn manuals_path(&self) -> PathBuf {
+        self.root.join("manuals")
+    }
+
+    pub fn settings_path(&self) -> PathBuf {
+        self.root.join("settings")
+    }
+
+    pub fn temp_path(&self) -> PathBuf {
+        self.root.join("temp")
+    }
+
+    pub fn restore_staging_path(&self) -> PathBuf {
+        self.root.join("restore-staging")
+    }
+
+    pub fn safety_backups_path(&self) -> PathBuf {
+        self.root.join("safety-backups")
     }
 }
 
