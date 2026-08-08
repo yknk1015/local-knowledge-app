@@ -1,0 +1,28 @@
+[package]
+name = "web-knowledge-system"
+version = "0.1.0"
+description = "ローカルで完結する一人用FAQ・ナレッジ管理アプリ"
+authors = ["KnowledgeApp contributors"]
+edition = "2024"
+rust-version = "1.85"
+
+[lib]
+name = "web_knowledge_system_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+rusqlite = { version = "0.37", features = ["bundled", "backup"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+thiserror = "2"
+unicode-normalization = "0.1"
+url = "2"
+uuid = { version = "1", features = ["v7", "serde"] }
+
+[dev-dependencies]
+tempfile = "3"

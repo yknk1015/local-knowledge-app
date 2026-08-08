@@ -1,0 +1,1 @@
+{"main-capability":{"identifier":"main-capability","description":"KnowledgeAppのメイン画面に必要な最小権限","local":true,"windows":["main"],"permissions":["core:default"]}}
