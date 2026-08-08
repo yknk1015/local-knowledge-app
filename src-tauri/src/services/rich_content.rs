@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde_json::{Map, Value};
 use url::Url;
@@ -56,6 +56,41 @@ pub fn validate_and_extract_with_attachments(document: &Value) -> AppResult<Vali
             .map(|(id, alt_text)| AttachmentReference { id, alt_text })
             .collect(),
     })
+}
+
+pub fn remap_attachment_ids(
+    document: &Value,
+    replacements: &HashMap<String, String>,
+) -> AppResult<Value> {
+    let mut remapped = document.clone();
+    remap_node(&mut remapped, replacements)?;
+    Ok(remapped)
+}
+
+fn remap_node(node: &mut Value, replacements: &HashMap<String, String>) -> AppResult<()> {
+    let object = node.as_object_mut().ok_or_else(invalid_document)?;
+    if object.get("type").and_then(Value::as_str) == Some("image") {
+        let attrs = object
+            .get_mut("attrs")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(invalid_image)?;
+        let old_id = attrs
+            .get("attachmentId")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid_image)?;
+        let new_id = replacements.get(old_id).ok_or_else(invalid_image)?.clone();
+        attrs.insert("attachmentId".into(), Value::String(new_id.clone()));
+        attrs.insert(
+            "src".into(),
+            Value::String(format!("knowledge-attachment:{new_id}")),
+        );
+    }
+    if let Some(content) = object.get_mut("content") {
+        for child in content.as_array_mut().ok_or_else(invalid_document)? {
+            remap_node(child, replacements)?;
+        }
+    }
+    Ok(())
 }
 
 fn validate_node(
@@ -249,7 +284,11 @@ fn validate_link(attrs: Option<&Value>) -> AppResult<()> {
         return Err(invalid_document());
     }
     let url = Url::parse(href).map_err(|_| invalid_link())?;
-    if !matches!(url.scheme(), "http" | "https") {
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
         return Err(invalid_link());
     }
     Ok(())
@@ -428,5 +467,31 @@ mod tests {
                 "ATT-004"
             );
         }
+    }
+
+    #[test]
+    fn remaps_managed_image_ids_for_an_independent_copy() {
+        let old_id = Uuid::now_v7().to_string();
+        let new_id = Uuid::now_v7().to_string();
+        let document = json!({
+            "type": "doc",
+            "content": [{
+                "type": "image",
+                "attrs": {
+                    "src": format!("knowledge-attachment:{old_id}"),
+                    "alt": "設定画面",
+                    "title": null,
+                    "attachmentId": old_id
+                }
+            }]
+        });
+        let remapped = remap_attachment_ids(
+            &document,
+            &HashMap::from([(old_id.clone(), new_id.clone())]),
+        )
+        .unwrap();
+        let validated = validate_and_extract_with_attachments(&remapped).unwrap();
+        assert_eq!(validated.attachments[0].id, new_id);
+        assert!(!remapped.to_string().contains(&old_id));
     }
 }

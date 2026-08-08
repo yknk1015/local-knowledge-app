@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { knowledgeApi, toAppError } from "../api/knowledgeApi";
 import { ErrorState, LoadingState } from "../components/Feedback";
 import { RichTextViewer } from "../components/RichTextEditor";
@@ -8,6 +8,7 @@ import type { AppError, Article } from "../types/domain";
 
 export function ArticleDetailPage() {
   const { articleId = "" } = useParams();
+  const navigate = useNavigate();
   const [article, setArticle] = useState<Article | null>(null);
   const [error, setError] = useState<AppError | null>(null);
   const [loading, setLoading] = useState(true);
@@ -57,6 +58,18 @@ export function ArticleDetailPage() {
     }
   };
 
+  const duplicateArticle = async () => {
+    setActionBusy(true);
+    setError(null);
+    try {
+      const copy = await knowledgeApi.duplicateArticle(article.id);
+      navigate(`/articles/${copy.id}/edit`);
+    } catch (caught) {
+      setError(toAppError(caught));
+      setActionBusy(false);
+    }
+  };
+
   if (article.deletedAt) {
     return (
       <article className="page article-detail">
@@ -86,6 +99,9 @@ export function ArticleDetailPage() {
       <div className="detail-actions">
         <Link to="/search" className="text-link">← 一覧へ戻る</Link>
         <div className="detail-action-buttons">
+          <button type="button" className="button secondary" disabled={actionBusy} onClick={() => void duplicateArticle()}>
+            {actionBusy ? "処理中…" : "複製して下書きを作る"}
+          </button>
           <Link to={`/articles/${article.id}/edit`} className="button secondary">編集する</Link>
           <button type="button" className="button danger-outline" disabled={actionBusy} onClick={() => void deleteArticle()}>
             {actionBusy ? "処理中…" : "削除"}

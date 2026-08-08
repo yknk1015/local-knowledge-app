@@ -67,6 +67,7 @@ export const knowledgeApi = {
     call<ArticleListItem[]>("search_articles", { input }),
   getArticle: (id: string) => call<Article>("get_article", { id }),
   saveArticle: (input: SaveArticleInput) => call<Article>("save_article", { input }),
+  duplicateArticle: (id: string) => call<Article>("duplicate_article", { id }),
   stageArticleImage: (path: string) =>
     call<StagedArticleImage>("stage_article_image", { path }),
   stageArticleImageBytes: (originalName: string, bytes: number[]) =>
@@ -75,6 +76,7 @@ export const knowledgeApi = {
     }),
   discardStagedArticleImage: (id: string) =>
     call<void>("discard_staged_article_image", { id }),
+  openExternalUrl: (url: string) => call<void>("open_external_url", { url }),
   listArticlesForManagement: (input: ManagementArticlesInput) =>
     call<ManagementArticlePage>("list_articles_for_management", { input }),
   deleteArticle: (id: string) => call<Article>("delete_article", { id }),

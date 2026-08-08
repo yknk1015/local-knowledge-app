@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { knowledgeApi, toAppError } from "../api/knowledgeApi";
 import { EmptyState, ErrorState, LoadingState } from "../components/Feedback";
 import { StatusBadge } from "../components/StatusBadge";
@@ -14,6 +14,7 @@ import type {
 const EMPTY_PAGE: ManagementArticlePage = { items: [], total: 0, page: 1, pageSize: 50 };
 
 export function ArticleManagementPage() {
+  const navigate = useNavigate();
   const [categories, setCategories] = useState<Category[]>([]);
   const [result, setResult] = useState<ManagementArticlePage>(EMPTY_PAGE);
   const [query, setQuery] = useState("");
@@ -94,6 +95,19 @@ export function ArticleManagementPage() {
     } catch (caught) {
       setError(toAppError(caught));
     } finally {
+      setBusyId(null);
+    }
+  };
+
+  const duplicateArticle = async (id: string) => {
+    setBusyId(id);
+    setError(null);
+    setNotice(null);
+    try {
+      const copy = await knowledgeApi.duplicateArticle(id);
+      navigate(`/articles/${copy.id}/edit`);
+    } catch (caught) {
+      setError(toAppError(caught));
       setBusyId(null);
     }
   };
@@ -183,6 +197,9 @@ export function ArticleManagementPage() {
                     ) : (
                       <>
                         <Link to={`/articles/${article.id}/edit`} className="button secondary">編集</Link>
+                        <button type="button" className="button secondary" disabled={busyId === article.id} onClick={() => void duplicateArticle(article.id)}>
+                          複製
+                        </button>
                         <button type="button" className="button danger-outline" disabled={busyId === article.id} onClick={() => void deleteArticle(article.id, article.title)}>
                           削除
                         </button>

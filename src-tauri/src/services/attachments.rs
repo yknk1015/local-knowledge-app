@@ -147,6 +147,14 @@ pub fn stage_bytes(
     })
 }
 
+pub fn stage_copy_of_attachment(
+    data_root: &DataRootService,
+    attachment: &ArticleAttachment,
+) -> AppResult<StagedArticleImage> {
+    let bytes = verified_existing_bytes(data_root, attachment)?;
+    stage_bytes(data_root, &attachment.original_name, &bytes)
+}
+
 pub fn prepare(
     data_root: &DataRootService,
     article_id: &str,
@@ -168,15 +176,7 @@ pub fn prepare(
             continue;
         }
         if let Some(attachment) = existing_by_id.get(reference.id.as_str()) {
-            let managed_path = resolve_managed_attachment(data_root, &attachment.asset_path)?;
-            let bytes = fs::read(managed_path).map_err(|_| staged_image_missing())?;
-            let detected = detect_image_type(&bytes).ok_or_else(unsupported_image)?;
-            if detected.media_type != attachment.media_type
-                || bytes.len() as i64 != attachment.byte_size
-                || sha256_hex(&bytes) != attachment.sha256
-            {
-                return Err(staged_image_missing());
-            }
+            verified_existing_bytes(data_root, attachment)?;
             records.push(AttachmentRecord {
                 id: attachment.id.clone(),
                 relative_path: attachment.asset_path.clone(),
@@ -240,6 +240,22 @@ pub fn prepare(
         removed_files,
         staged_ids,
     })
+}
+
+fn verified_existing_bytes(
+    data_root: &DataRootService,
+    attachment: &ArticleAttachment,
+) -> AppResult<Vec<u8>> {
+    let managed_path = resolve_managed_attachment(data_root, &attachment.asset_path)?;
+    let bytes = fs::read(managed_path).map_err(|_| staged_image_missing())?;
+    let detected = detect_image_type(&bytes).ok_or_else(unsupported_image)?;
+    if detected.media_type != attachment.media_type
+        || bytes.len() as i64 != attachment.byte_size
+        || sha256_hex(&bytes) != attachment.sha256
+    {
+        return Err(staged_image_missing());
+    }
+    Ok(bytes)
 }
 
 pub fn rollback(prepared: &PreparedAttachments) {
@@ -601,6 +617,12 @@ mod tests {
         assert_eq!(database.backup_counts().unwrap().attachments, 1);
         assert!(final_path.exists());
         assert!(!Path::new(&staged.asset_path).exists());
+
+        let copied_stage = stage_copy_of_attachment(&root, &saved.attachments[0]).unwrap();
+        assert_ne!(copied_stage.id, saved.attachments[0].id);
+        assert!(Path::new(&copied_stage.asset_path).exists());
+        assert!(final_path.exists(), "複製準備で元画像を変更しない");
+        discard_stage(&root, &copied_stage.id);
 
         let empty_body = json!({"type": "doc", "content": [{"type": "paragraph"}]});
         let prepared_removal = prepare(&root, &article_id, &[], &saved.attachments).unwrap();

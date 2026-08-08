@@ -1,6 +1,8 @@
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
 use tauri::State;
+use tauri_plugin_opener::OpenerExt;
+use url::Url;
 
 use crate::{
     AppState,
@@ -131,6 +133,116 @@ pub fn save_article(input: SaveArticleInput, state: State<'_, AppState>) -> AppR
 }
 
 #[tauri::command]
+pub fn duplicate_article(id: String, state: State<'_, AppState>) -> AppResult<Article> {
+    let mut database = lock_database(&state)?;
+    let source = database.get_article(&id)?;
+    if source.deleted_at.is_some() {
+        return Err(AppError::new(
+            "ART-006",
+            "削除済みFAQは複製できません。",
+            "FAQを復元してから複製してください。",
+        ));
+    }
+
+    let source_content = rich_content::validate_and_extract_with_attachments(&source.body_doc)?;
+    let source_attachments = source
+        .attachments
+        .iter()
+        .map(|attachment| (attachment.id.as_str(), attachment))
+        .collect::<HashMap<_, _>>();
+    let mut replacements = HashMap::new();
+    let mut staged_ids = Vec::new();
+    for reference in &source_content.attachments {
+        let Some(source_attachment) = source_attachments.get(reference.id.as_str()) else {
+            cleanup_duplicate_stages(&state, &staged_ids);
+            return Err(AppError::new(
+                "ATT-005",
+                "複製元FAQの画像が見つかりません。",
+                "複製元FAQを開いて画像を確認し、必要に応じて追加し直してください。",
+            ));
+        };
+        let staged =
+            match attachments::stage_copy_of_attachment(&state.data_root, source_attachment) {
+                Ok(staged) => staged,
+                Err(error) => {
+                    cleanup_duplicate_stages(&state, &staged_ids);
+                    return Err(error);
+                }
+            };
+        replacements.insert(reference.id.clone(), staged.id.clone());
+        staged_ids.push(staged.id);
+    }
+
+    let body_doc = match rich_content::remap_attachment_ids(&source.body_doc, &replacements) {
+        Ok(body_doc) => body_doc,
+        Err(error) => {
+            cleanup_duplicate_stages(&state, &staged_ids);
+            return Err(error);
+        }
+    };
+    let copied_content = match rich_content::validate_and_extract_with_attachments(&body_doc) {
+        Ok(content) => content,
+        Err(error) => {
+            cleanup_duplicate_stages(&state, &staged_ids);
+            return Err(error);
+        }
+    };
+    let article_id = Uuid::now_v7().to_string();
+    let prepared = match attachments::prepare(
+        &state.data_root,
+        &article_id,
+        &copied_content.attachments,
+        &[],
+    ) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            cleanup_duplicate_stages(&state, &staged_ids);
+            return Err(error);
+        }
+    };
+    let title = duplicate_title(&source.title);
+    let saved = database.save_article(ArticleRecord {
+        id: &article_id,
+        is_new: true,
+        category_id: &source.category_id,
+        title: &title,
+        summary: &source.summary,
+        body_doc: &body_doc,
+        body_plain_text: &copied_content.plain_text,
+        status: "draft",
+        importance: source.importance,
+        attachments: &prepared.records,
+    });
+    let mut article = match saved {
+        Ok(article) => article,
+        Err(error) => {
+            attachments::rollback(&prepared);
+            cleanup_duplicate_stages(&state, &staged_ids);
+            return Err(error);
+        }
+    };
+    attachments::commit(&state.data_root, &prepared);
+    attachments::hydrate_article_paths(&state.data_root, &mut article)?;
+    Ok(article)
+}
+
+fn cleanup_duplicate_stages(state: &State<'_, AppState>, ids: &[String]) {
+    for id in ids {
+        attachments::discard_stage(&state.data_root, id);
+    }
+}
+
+fn duplicate_title(source: &str) -> String {
+    const SUFFIX: &str = "（コピー）";
+    let maximum_source = 200 - SUFFIX.chars().count();
+    format!(
+        "{}{}",
+        source.chars().take(maximum_source).collect::<String>(),
+        SUFFIX
+    )
+}
+
+#[tauri::command]
 pub fn stage_article_image(
     path: String,
     state: State<'_, AppState>,
@@ -149,6 +261,41 @@ pub fn stage_article_image_bytes(
 #[tauri::command]
 pub fn discard_staged_article_image(id: String, state: State<'_, AppState>) {
     attachments::discard_stage(&state.data_root, &id);
+}
+
+#[tauri::command]
+pub fn open_external_url(url: String, app: tauri::AppHandle) -> AppResult<()> {
+    validate_external_url(&url)?;
+    app.opener().open_url(url, None::<&str>).map_err(|_| {
+        AppError::new(
+            "URL-002",
+            "参考URLを既定ブラウザーで開けませんでした。",
+            "Windowsの既定ブラウザー設定を確認して、もう一度お試しください。",
+        )
+    })
+}
+
+fn validate_external_url(url: &str) -> AppResult<()> {
+    if url.chars().count() > 2048 {
+        return Err(invalid_external_url());
+    }
+    let parsed = Url::parse(url).map_err(|_| invalid_external_url())?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return Err(invalid_external_url());
+    }
+    Ok(())
+}
+
+fn invalid_external_url() -> AppError {
+    AppError::new(
+        "URL-001",
+        "この参考URLは安全に開けません。",
+        "http:// または https:// で始まるURLに修正してください。",
+    )
 }
 
 #[tauri::command]
@@ -284,5 +431,27 @@ mod tests {
             importance: 1,
         };
         assert_eq!(validate_article_fields(&input).unwrap_err().code, "ART-001");
+    }
+
+    #[test]
+    fn external_url_allows_only_http_and_https_with_a_host() {
+        assert!(validate_external_url("https://example.com/guide").is_ok());
+        assert!(validate_external_url("http://localhost:7100/").is_ok());
+        for invalid in [
+            "javascript:alert(1)",
+            "file:///C:/secret.txt",
+            "data:text/plain,test",
+            "https://",
+            "https://user:password@example.com/",
+        ] {
+            assert_eq!(validate_external_url(invalid).unwrap_err().code, "URL-001");
+        }
+    }
+
+    #[test]
+    fn duplicate_title_stays_within_article_limit() {
+        let title = duplicate_title(&"あ".repeat(200));
+        assert_eq!(title.chars().count(), 200);
+        assert!(title.ends_with("（コピー）"));
     }
 }

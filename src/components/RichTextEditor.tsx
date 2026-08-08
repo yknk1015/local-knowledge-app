@@ -1,9 +1,10 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import Image from "@tiptap/extension-image";
 import { EditorContent, useEditor, type JSONContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { TableKit } from "@tiptap/extension-table";
+import { knowledgeApi, toAppError } from "../api/knowledgeApi";
 
 const EMPTY_DOCUMENT: JSONContent = {
   type: "doc",
@@ -253,6 +254,13 @@ export function RichTextViewer({
   value: Record<string, unknown>;
   imageSources?: ManagedImageSource[];
 }) {
+  const [pendingUrl, setPendingUrl] = useState<{
+    url: string;
+    displayText: string;
+    host: string;
+  } | null>(null);
+  const [openingUrl, setOpeningUrl] = useState(false);
+  const [urlError, setUrlError] = useState<string | null>(null);
   const editor = useEditor({
     extensions,
     content: hydrateManagedImages(value, imageSources) as JSONContent,
@@ -267,31 +275,76 @@ export function RichTextViewer({
     }
   }, [editor, imageSources, value]);
 
-  const stopExternalNavigation = (target: EventTarget | null) => {
-    if (target instanceof Element && target.closest("a")) {
-      window.alert("参考URLを既定ブラウザーで開く機能は、次の開発版で利用できるようになります。");
-      return true;
+  const requestExternalNavigation = (target: EventTarget | null) => {
+    const anchor = target instanceof Element ? target.closest("a") : null;
+    const href = anchor?.getAttribute("href");
+    if (!anchor || !href) return false;
+    try {
+      const parsed = new URL(href);
+      if (!["http:", "https:"].includes(parsed.protocol)) return false;
+      setUrlError(null);
+      setPendingUrl({
+        url: parsed.toString(),
+        displayText: anchor.textContent?.trim() || parsed.toString(),
+        host: parsed.hostname,
+      });
+    } catch {
+      setUrlError("参考URLの形式を確認できませんでした。FAQを編集してURLを設定し直してください。");
     }
-    return false;
+    return true;
+  };
+
+  const openPendingUrl = async () => {
+    if (!pendingUrl) return;
+    setOpeningUrl(true);
+    setUrlError(null);
+    try {
+      await knowledgeApi.openExternalUrl(pendingUrl.url);
+      setPendingUrl(null);
+    } catch (caught) {
+      setUrlError(toAppError(caught).message);
+    } finally {
+      setOpeningUrl(false);
+    }
   };
 
   return (
     <div
       className="rich-viewer"
       onClickCapture={(event) => {
-        if (stopExternalNavigation(event.target)) {
+        if (requestExternalNavigation(event.target)) {
           event.preventDefault();
           event.stopPropagation();
         }
       }}
       onKeyDownCapture={(event) => {
-        if (event.key === "Enter" && stopExternalNavigation(event.target)) {
+        if (event.key === "Enter" && requestExternalNavigation(event.target)) {
           event.preventDefault();
           event.stopPropagation();
         }
       }}
     >
       <EditorContent editor={editor} />
+      {pendingUrl && (
+        <div className="modal-backdrop" role="presentation">
+          <section className="url-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="url-confirm-title">
+            <span className="eyebrow">外部サイトを開きます</span>
+            <h2 id="url-confirm-title">参考URLを既定ブラウザーで開きますか？</h2>
+            <dl>
+              <div><dt>表示文字</dt><dd>{pendingUrl.displayText}</dd></div>
+              <div><dt>接続先</dt><dd>{pendingUrl.host}</dd></div>
+              <div><dt>URL</dt><dd className="url-value">{pendingUrl.url}</dd></div>
+            </dl>
+            {urlError && <p className="url-open-error" role="alert">{urlError}</p>}
+            <div className="dialog-actions">
+              <button type="button" className="button ghost" onClick={() => setPendingUrl(null)} disabled={openingUrl}>キャンセル</button>
+              <button type="button" className="button primary" onClick={() => void openPendingUrl()} disabled={openingUrl}>
+                {openingUrl ? "開いています…" : "既定ブラウザーで開く"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

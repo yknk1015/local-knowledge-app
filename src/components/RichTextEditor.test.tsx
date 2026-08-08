@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   dehydrateManagedImages,
@@ -6,9 +6,11 @@ import {
   RichTextViewer,
   stripLinksFromPastedHtml,
 } from "./RichTextEditor";
+import { knowledgeApi } from "../api/knowledgeApi";
 
 vi.mock("@tauri-apps/api/core", () => ({
   convertFileSrc: (path: string) => `asset://localhost/${path}`,
+  invoke: vi.fn(),
 }));
 
 describe("stripLinksFromPastedHtml", () => {
@@ -58,8 +60,10 @@ describe("managed FAQ images", () => {
 describe("RichTextViewer", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it("stops external navigation until confirmation-based opening is implemented", async () => {
-    const alert = vi.spyOn(window, "alert").mockImplementation(() => undefined);
+  it("shows the destination before opening a reference URL in the default browser", async () => {
+    const openExternalUrl = vi
+      .spyOn(knowledgeApi, "openExternalUrl")
+      .mockResolvedValue(undefined);
     render(
       <RichTextViewer
         value={{
@@ -82,6 +86,10 @@ describe("RichTextViewer", () => {
 
     fireEvent.click(await screen.findByRole("link", { name: "参考サイト" }));
 
-    expect(alert).toHaveBeenCalledOnce();
+    expect(await screen.findByRole("dialog")).toBeVisible();
+    expect(screen.getByText("example.com")).toBeVisible();
+    expect(screen.getByText("https://example.com/")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "既定ブラウザーで開く" }));
+    await waitFor(() => expect(openExternalUrl).toHaveBeenCalledWith("https://example.com/"));
   });
 });
