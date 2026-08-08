@@ -12,6 +12,7 @@ import type {
   SaveArticleInput,
   SearchArticlesInput,
   RestoreResult,
+  StagedArticleImage,
   SystemInfo,
 } from "../types/domain";
 
@@ -66,6 +67,14 @@ export const knowledgeApi = {
     call<ArticleListItem[]>("search_articles", { input }),
   getArticle: (id: string) => call<Article>("get_article", { id }),
   saveArticle: (input: SaveArticleInput) => call<Article>("save_article", { input }),
+  stageArticleImage: (path: string) =>
+    call<StagedArticleImage>("stage_article_image", { path }),
+  stageArticleImageBytes: (originalName: string, bytes: number[]) =>
+    call<StagedArticleImage>("stage_article_image_bytes", {
+      input: { originalName, bytes },
+    }),
+  discardStagedArticleImage: (id: string) =>
+    call<void>("discard_staged_article_image", { id }),
   listArticlesForManagement: (input: ManagementArticlesInput) =>
     call<ManagementArticlePage>("list_articles_for_management", { input }),
   deleteArticle: (id: string) => call<Article>("delete_article", { id }),

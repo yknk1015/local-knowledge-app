@@ -867,9 +867,11 @@ mod tests {
         let mut database = Database::open(&root.database_path()).unwrap();
         let category = database.create_category("Windows", None).unwrap();
         let body = json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"再起動します"}]}]});
+        let article_id = Uuid::now_v7().to_string();
         database
             .save_article(ArticleRecord {
-                id: None,
+                id: &article_id,
+                is_new: true,
                 category_id: &category.id,
                 title: "画面が暗い",
                 summary: "画面設定を確認します",
@@ -877,6 +879,7 @@ mod tests {
                 body_plain_text: "再起動します",
                 status: "published",
                 importance: 1,
+                attachments: &[],
             })
             .unwrap();
         fs::write(

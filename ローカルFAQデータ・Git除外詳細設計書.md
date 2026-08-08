@@ -5,9 +5,9 @@
 | 項目 | 内容 |
 |---|---|
 | 文書名 | ローカルFAQデータ・Git除外詳細設計書 |
-| 版 | 0.3（フルバックアップ保存・復元反映版） |
+| 版 | 0.4（FAQ添付画像の一時保存・確定処理反映版） |
 | 作成日 | 2026-08-08 |
-| 上位文書 | `FAQシステム要件定義書.md` v0.5、`FAQシステム基本設計書.md` v0.9 |
+| 上位文書 | `FAQシステム要件定義書.md` v0.5、`FAQシステム基本設計書.md` v1.0 |
 | 対象 | 利用者が作成したFAQデータをGitHub等へ含めないための保存・検査設計 |
 
 ## 2. 目的
@@ -349,6 +349,9 @@ GitHub等へpushした場合、通常の削除コミットだけでは履歴に�
 | リリース混入検査 | 完了 | リリースビルド後のフォルダにDB、バックアップ、エクスポートがないことを確認した。 |
 | フルバックアップ | 完了 | OS一時フォルダの検証データで、SQLiteスナップショット、ZIP梱包、SHA-256検証、任意保存先への確定を確認した。 |
 | 復元 | 完了 | 破損ファイル拒否、復元前安全バックアップ、DB・設定・添付ファイル復元を確認した。 |
+| FAQ添付画像 | 完了 | 選択・貼り付け画像を`temp/staged-article-images`へ一時保存し、FAQ保存成功時だけ`attachments/articles/{articleId}`へ確定する。本文JSONとDBには絶対パスを保存しない。 |
+| 添付画像検査 | 完了 | PNG・JPEG・WebP・GIFのファイル内容、10MB上限、サイズ、SHA-256をRust側で検査する。外部画像URLとBase64画像を本文へ保存しない。 |
+| 添付画像表示範囲 | 完了 | Tauri asset protocolの読取範囲を添付画像と保存前一時画像の2フォルダへ限定し、DBや設定ファイルを公開しない。 |
 
 ## 15. 設計変更時のルール
 
@@ -365,7 +368,7 @@ GitHub等へpushした場合、通常の削除コミットだけでは履歴に�
 
 - `AGENTS.md`
 - `FAQシステム要件定義書.md` v0.5
-- `FAQシステム基本設計書.md` v0.9
+- `FAQシステム基本設計書.md` v1.0
 - [Tauri 2：appLocalDataDir](https://v2.tauri.app/reference/javascript/api/namespacepath/#applocaldatadir)
 - [Tauri 2：ファイルシステム](https://v2.tauri.app/plugin/file-system/)
 - [Git：gitignore](https://git-scm.com/docs/gitignore)

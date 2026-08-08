@@ -24,6 +24,7 @@ pub fn run() {
             })?;
             let forbidden_roots = forbidden_roots(app);
             let data_root = DataRootService::initialize(app_data_dir, &forbidden_roots)?;
+            services::attachments::cleanup_stale_stages(&data_root);
             let database = Database::open(&data_root.database_path())?;
             app.manage(AppState {
                 data_root,
@@ -40,6 +41,9 @@ pub fn run() {
             commands::get_article,
             commands::search_articles,
             commands::save_article,
+            commands::stage_article_image,
+            commands::stage_article_image_bytes,
+            commands::discard_staged_article_image,
             commands::list_articles_for_management,
             commands::delete_article,
             commands::restore_article,

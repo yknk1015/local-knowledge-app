@@ -55,6 +55,39 @@ pub struct Article {
     pub created_at: String,
     pub updated_at: String,
     pub deleted_at: Option<String>,
+    pub attachments: Vec<ArticleAttachment>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArticleAttachment {
+    pub id: String,
+    pub original_name: String,
+    pub media_type: String,
+    pub byte_size: i64,
+    pub sha256: String,
+    pub alt_text: String,
+    pub asset_path: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StagedArticleImage {
+    pub id: String,
+    pub original_name: String,
+    pub media_type: String,
+    pub byte_size: i64,
+    pub sha256: String,
+    pub alt_text: String,
+    pub asset_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StageArticleImageBytesInput {
+    pub original_name: String,
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Debug, Deserialize)]

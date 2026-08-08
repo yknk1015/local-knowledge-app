@@ -1,8 +1,9 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { knowledgeApi, toAppError } from "../api/knowledgeApi";
 import { ErrorState, LoadingState } from "../components/Feedback";
-import { RichTextEditor } from "../components/RichTextEditor";
+import { RichTextEditor, type ManagedImageSource } from "../components/RichTextEditor";
 import type { AppError, ArticleStatus, Category } from "../types/domain";
 
 const EMPTY_DOCUMENT: Record<string, unknown> = {
@@ -19,6 +20,7 @@ export function ArticleEditorPage() {
   const [categoryId, setCategoryId] = useState("");
   const [summary, setSummary] = useState("");
   const [bodyDoc, setBodyDoc] = useState<Record<string, unknown>>(EMPTY_DOCUMENT);
+  const [imageSources, setImageSources] = useState<ManagedImageSource[]>([]);
   const [status, setStatus] = useState<ArticleStatus>("draft");
   const [importance, setImportance] = useState(1);
   const [loading, setLoading] = useState(true);
@@ -26,6 +28,13 @@ export function ArticleEditorPage() {
   const [error, setError] = useState<AppError | null>(null);
   const [validation, setValidation] = useState<string[]>([]);
   const saveFeedbackRef = useRef<HTMLDivElement>(null);
+  const stagedImageIdsRef = useRef(new Set<string>());
+
+  useEffect(() => () => {
+    for (const id of stagedImageIdsRef.current) {
+      void knowledgeApi.discardStagedArticleImage(id);
+    }
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -53,6 +62,13 @@ export function ArticleEditorPage() {
         setCategoryId(article.categoryId);
         setSummary(article.summary);
         setBodyDoc(article.bodyDoc);
+        setImageSources(
+          article.attachments.map((attachment) => ({
+            id: attachment.id,
+            assetPath: attachment.assetPath,
+            altText: attachment.altText,
+          })),
+        );
         setStatus(article.status);
         setImportance(article.importance);
       } catch (caught) {
@@ -75,6 +91,50 @@ export function ArticleEditorPage() {
   }, [error, validation]);
 
   const canSave = useMemo(() => title.trim() !== "" && categoryId !== "", [categoryId, title]);
+
+  const requestImage = async (file?: File): Promise<ManagedImageSource | null> => {
+    setError(null);
+    try {
+      const staged = file
+        ? await knowledgeApi.stageArticleImageBytes(
+            file.name || "pasted-image",
+            Array.from(new Uint8Array(await file.arrayBuffer())),
+          )
+        : await (async () => {
+            const selected = await open({
+              multiple: false,
+              directory: false,
+              filters: [
+                {
+                  name: "画像（10MB以下）",
+                  extensions: ["png", "jpg", "jpeg", "webp", "gif"],
+                },
+              ],
+            });
+            return typeof selected === "string"
+              ? knowledgeApi.stageArticleImage(selected)
+              : null;
+          })();
+      if (!staged) return null;
+      const source = {
+        id: staged.id,
+        assetPath: staged.assetPath,
+        altText: staged.altText,
+      };
+      stagedImageIdsRef.current.add(staged.id);
+      setImageSources((current) => [...current, source]);
+      return source;
+    } catch (caught) {
+      setError(toAppError(caught));
+      return null;
+    }
+  };
+
+  const discardImage = async (id: string) => {
+    stagedImageIdsRef.current.delete(id);
+    setImageSources((current) => current.filter((image) => image.id !== id));
+    await knowledgeApi.discardStagedArticleImage(id);
+  };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -189,8 +249,18 @@ export function ArticleEditorPage() {
           <div className="section-number">2</div>
           <div className="section-content">
             <h2>回答</h2>
-            <p className="section-help">見出し、箇条書き、表、参考URLを使って分かりやすく整理できます。</p>
-            <RichTextEditor value={bodyDoc} onChange={setBodyDoc} disabled={saving} />
+            <p className="section-help">見出し、箇条書き、表、画像、参考URLを使って分かりやすく整理できます。PNG・JPEG・WebP・GIFを1件10MBまで追加できます。</p>
+            <RichTextEditor
+              value={bodyDoc}
+              onChange={setBodyDoc}
+              imageSources={imageSources}
+              onRequestImage={requestImage}
+              onDiscardImage={discardImage}
+              disabled={saving}
+            />
+            <p className="image-help">
+              「画像を追加」またはクリップボードからの貼り付けで挿入できます。画像はアプリ管理フォルダへコピーされ、外部へ送信されません。
+            </p>
             <p className="url-help">
               URLを入力・貼り付けると、クリックされない文字として安全に保存されます。クリック可能にする場合は文字を選択して「参考URL」、文字へ戻す場合は「リンク解除」を選んでください。
             </p>

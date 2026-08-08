@@ -9,8 +9,9 @@ use uuid::Uuid;
 use crate::{
     errors::{AppError, AppResult},
     models::{
-        Article, ArticleListItem, BackupCounts, Category, ManagementArticleListItem,
-        ManagementArticlePage, ManagementArticlesInput, SearchArticlesInput,
+        Article, ArticleAttachment, ArticleListItem, BackupCounts, Category,
+        ManagementArticleListItem, ManagementArticlePage, ManagementArticlesInput,
+        SearchArticlesInput,
     },
 };
 
@@ -21,7 +22,8 @@ pub struct Database {
 }
 
 pub struct ArticleRecord<'a> {
-    pub id: Option<&'a str>,
+    pub id: &'a str,
+    pub is_new: bool,
     pub category_id: &'a str,
     pub title: &'a str,
     pub summary: &'a str,
@@ -29,6 +31,19 @@ pub struct ArticleRecord<'a> {
     pub body_plain_text: &'a str,
     pub status: &'a str,
     pub importance: i64,
+    pub attachments: &'a [AttachmentRecord],
+}
+
+#[derive(Debug, Clone)]
+pub struct AttachmentRecord {
+    pub id: String,
+    pub relative_path: String,
+    pub original_name: String,
+    pub media_type: String,
+    pub byte_size: i64,
+    pub sha256: String,
+    pub alt_text: String,
+    pub created_at: String,
 }
 
 impl Database {
@@ -457,10 +472,7 @@ impl Database {
             ));
         }
 
-        let id = article
-            .id
-            .map(str::to_owned)
-            .unwrap_or_else(|| Uuid::now_v7().to_string());
+        let id = article.id.to_owned();
         let now = Utc::now().to_rfc3339();
         let body_doc_json = serde_json::to_string(article.body_doc).map_err(|_| {
             AppError::new(
@@ -470,7 +482,7 @@ impl Database {
             )
         })?;
 
-        if article.id.is_some() {
+        if !article.is_new {
             let updated = transaction.execute(
                 r#"
                 UPDATE articles
@@ -519,6 +531,32 @@ impl Database {
         }
 
         transaction.execute(
+            "DELETE FROM article_attachments WHERE article_id = ?1",
+            [&id],
+        )?;
+        for attachment in article.attachments {
+            transaction.execute(
+                r#"
+                INSERT INTO article_attachments(
+                    id, article_id, relative_path, original_name, media_type,
+                    byte_size, sha256, alt_text, created_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                "#,
+                params![
+                    attachment.id,
+                    id,
+                    attachment.relative_path,
+                    attachment.original_name,
+                    attachment.media_type,
+                    attachment.byte_size,
+                    attachment.sha256,
+                    attachment.alt_text,
+                    attachment.created_at,
+                ],
+            )?;
+        }
+
+        transaction.execute(
             r#"
             INSERT INTO article_search_documents(article_id, title, summary, body)
             VALUES (?1, ?2, ?3, ?4)
@@ -545,7 +583,8 @@ impl Database {
     }
 
     pub fn get_article(&self, id: &str) -> AppResult<Article> {
-        self.connection
+        let mut article = self
+            .connection
             .query_row(
                 r#"
                 SELECT a.id, a.category_id, c.name, a.title, a.summary, a.body_doc_json,
@@ -559,7 +598,33 @@ impl Database {
                 article_from_row,
             )
             .optional()?
-            .ok_or_else(article_not_found)
+            .ok_or_else(article_not_found)?;
+        article.attachments = self.list_article_attachments(id)?;
+        Ok(article)
+    }
+
+    pub fn list_article_attachments(&self, article_id: &str) -> AppResult<Vec<ArticleAttachment>> {
+        let mut statement = self.connection.prepare(
+            r#"
+            SELECT id, original_name, media_type, byte_size, sha256, alt_text, relative_path, created_at
+              FROM article_attachments
+             WHERE article_id = ?1
+             ORDER BY created_at, id
+            "#,
+        )?;
+        let rows = statement.query_map([article_id], |row| {
+            Ok(ArticleAttachment {
+                id: row.get(0)?,
+                original_name: row.get(1)?,
+                media_type: row.get(2)?,
+                byte_size: row.get(3)?,
+                sha256: row.get(4)?,
+                alt_text: row.get(5)?,
+                asset_path: row.get(6)?,
+                created_at: row.get(7)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
     }
 
     pub fn search_articles(&self, input: &SearchArticlesInput) -> AppResult<Vec<ArticleListItem>> {
@@ -757,6 +822,7 @@ fn article_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Article> {
         created_at: row.get(9)?,
         updated_at: row.get(10)?,
         deleted_at: row.get(11)?,
+        attachments: Vec::new(),
     })
 }
 
@@ -903,10 +969,12 @@ mod tests {
         let (directory, mut database) = temporary_database();
         let category = database.create_category("Windows", None).unwrap();
         let body = json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "再起動します"}]}]});
+        let article_id = Uuid::now_v7().to_string();
 
         let draft = database
             .save_article(ArticleRecord {
-                id: None,
+                id: &article_id,
+                is_new: true,
                 category_id: &category.id,
                 title: "画面が真っ暗",
                 summary: "Windowsの画面を確認します",
@@ -914,6 +982,7 @@ mod tests {
                 body_plain_text: "再起動します",
                 status: "draft",
                 importance: 1,
+                attachments: &[],
             })
             .unwrap();
         drop(database);
@@ -951,9 +1020,11 @@ mod tests {
         let (_directory, mut database) = temporary_database();
         let category = database.create_category("PC", None).unwrap();
         let body = json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"確認します"}]}]});
+        let article_id = Uuid::now_v7().to_string();
         let article = database
             .save_article(ArticleRecord {
-                id: None,
+                id: &article_id,
+                is_new: true,
                 category_id: &category.id,
                 title: "ネットワーク確認",
                 summary: "接続を確認します",
@@ -961,6 +1032,7 @@ mod tests {
                 body_plain_text: "確認します",
                 status: "published",
                 importance: 1,
+                attachments: &[],
             })
             .unwrap();
 

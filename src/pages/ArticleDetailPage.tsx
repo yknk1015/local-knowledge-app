@@ -108,7 +108,14 @@ export function ArticleDetailPage() {
       </header>
       <section className="answer-section">
         <h2>回答</h2>
-        <RichTextViewer value={article.bodyDoc} />
+        <RichTextViewer
+          value={article.bodyDoc}
+          imageSources={article.attachments.map((attachment) => ({
+            id: attachment.id,
+            assetPath: attachment.assetPath,
+            altText: attachment.altText,
+          }))}
+        />
       </section>
       <aside className="detail-safety-note">
         <strong>作業前にご確認ください</strong>

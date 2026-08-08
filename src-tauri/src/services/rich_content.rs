@@ -1,5 +1,8 @@
+use std::collections::BTreeMap;
+
 use serde_json::{Map, Value};
 use url::Url;
+use uuid::Uuid;
 
 use crate::errors::{AppError, AppResult};
 
@@ -16,21 +19,50 @@ const ALLOWED_NODES: &[&str] = &[
     "tableRow",
     "tableCell",
     "tableHeader",
+    "image",
 ];
 
 const ALLOWED_MARKS: &[&str] = &["bold", "italic", "link"];
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachmentReference {
+    pub id: String,
+    pub alt_text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidatedRichContent {
+    pub plain_text: String,
+    pub attachments: Vec<AttachmentReference>,
+}
+
+#[cfg(test)]
 pub fn validate_and_extract(document: &Value) -> AppResult<String> {
+    Ok(validate_and_extract_with_attachments(document)?.plain_text)
+}
+
+pub fn validate_and_extract_with_attachments(document: &Value) -> AppResult<ValidatedRichContent> {
     if document.get("type").and_then(Value::as_str) != Some("doc") {
         return Err(invalid_document());
     }
 
     let mut plain_text = String::new();
-    validate_node(document, &mut plain_text)?;
-    Ok(plain_text.split_whitespace().collect::<Vec<_>>().join(" "))
+    let mut attachments = BTreeMap::new();
+    validate_node(document, &mut plain_text, &mut attachments)?;
+    Ok(ValidatedRichContent {
+        plain_text: plain_text.split_whitespace().collect::<Vec<_>>().join(" "),
+        attachments: attachments
+            .into_iter()
+            .map(|(id, alt_text)| AttachmentReference { id, alt_text })
+            .collect(),
+    })
 }
 
-fn validate_node(node: &Value, plain_text: &mut String) -> AppResult<()> {
+fn validate_node(
+    node: &Value,
+    plain_text: &mut String,
+    attachments: &mut BTreeMap<String, String>,
+) -> AppResult<()> {
     let object = node.as_object().ok_or_else(invalid_document)?;
     let node_type = object
         .get("type")
@@ -41,7 +73,18 @@ fn validate_node(node: &Value, plain_text: &mut String) -> AppResult<()> {
         return Err(invalid_document());
     }
 
-    validate_attributes(node_type, object.get("attrs"))?;
+    if node_type == "image" {
+        let reference = validate_image(object.get("attrs"))?;
+        if !attachments.contains_key(&reference.id) {
+            if !reference.alt_text.trim().is_empty() {
+                plain_text.push_str(&reference.alt_text);
+                plain_text.push(' ');
+            }
+            attachments.insert(reference.id, reference.alt_text);
+        }
+    } else {
+        validate_attributes(node_type, object.get("attrs"))?;
+    }
     validate_marks(object.get("marks"))?;
 
     if node_type == "text" {
@@ -55,7 +98,7 @@ fn validate_node(node: &Value, plain_text: &mut String) -> AppResult<()> {
     if let Some(content) = object.get("content") {
         let children = content.as_array().ok_or_else(invalid_document)?;
         for child in children {
-            validate_node(child, plain_text)?;
+            validate_node(child, plain_text, attachments)?;
             if matches!(
                 child.get("type").and_then(Value::as_str),
                 Some("paragraph" | "heading" | "listItem" | "tableCell" | "tableHeader")
@@ -66,6 +109,39 @@ fn validate_node(node: &Value, plain_text: &mut String) -> AppResult<()> {
     }
 
     Ok(())
+}
+
+fn validate_image(attrs: Option<&Value>) -> AppResult<AttachmentReference> {
+    let attrs = attrs.and_then(Value::as_object).ok_or_else(invalid_image)?;
+    if attrs
+        .keys()
+        .any(|key| !["src", "alt", "title", "attachmentId"].contains(&key.as_str()))
+    {
+        return Err(invalid_image());
+    }
+    let id = attrs
+        .get("attachmentId")
+        .and_then(Value::as_str)
+        .ok_or_else(invalid_image)?;
+    Uuid::parse_str(id).map_err(|_| invalid_image())?;
+    let expected_source = format!("knowledge-attachment:{id}");
+    if attrs.get("src").and_then(Value::as_str) != Some(expected_source.as_str()) {
+        return Err(invalid_image());
+    }
+    let alt_text = nullable_limited_text(attrs.get("alt"), 500)?;
+    let _title = nullable_limited_text(attrs.get("title"), 500)?;
+    Ok(AttachmentReference {
+        id: id.to_owned(),
+        alt_text,
+    })
+}
+
+fn nullable_limited_text(value: Option<&Value>, maximum: usize) -> AppResult<String> {
+    match value {
+        None | Some(Value::Null) => Ok(String::new()),
+        Some(Value::String(text)) if text.chars().count() <= maximum => Ok(text.clone()),
+        _ => Err(invalid_image()),
+    }
 }
 
 fn validate_attributes(node_type: &str, attrs: Option<&Value>) -> AppResult<()> {
@@ -195,6 +271,14 @@ fn invalid_document() -> AppError {
     )
 }
 
+fn invalid_image() -> AppError {
+    AppError::new(
+        "ATT-004",
+        "回答内の画像参照が正しくありません。",
+        "画像を一度削除し、画像追加ボタンから選び直してください。外部画像URLやBase64画像は使用できません。",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,5 +384,49 @@ mod tests {
     fn rejects_unknown_nodes() {
         let document = json!({"type": "doc", "content": [{"type": "iframe"}]});
         assert!(validate_and_extract(&document).is_err());
+    }
+
+    #[test]
+    fn accepts_managed_images_and_extracts_alt_text() {
+        let id = Uuid::now_v7().to_string();
+        let document = json!({
+            "type": "doc",
+            "content": [{
+                "type": "image",
+                "attrs": {
+                    "src": format!("knowledge-attachment:{id}"),
+                    "alt": "設定画面のスクリーンショット",
+                    "title": null,
+                    "attachmentId": id
+                }
+            }]
+        });
+
+        let validated = validate_and_extract_with_attachments(&document).unwrap();
+        assert_eq!(validated.plain_text, "設定画面のスクリーンショット");
+        assert_eq!(validated.attachments.len(), 1);
+    }
+
+    #[test]
+    fn rejects_external_and_base64_images() {
+        for source in [
+            "https://example.com/image.png",
+            "data:image/png;base64,AAAA",
+        ] {
+            let id = Uuid::now_v7().to_string();
+            let document = json!({
+                "type": "doc",
+                "content": [{
+                    "type": "image",
+                    "attrs": {"src": source, "alt": null, "title": null, "attachmentId": id}
+                }]
+            });
+            assert_eq!(
+                validate_and_extract_with_attachments(&document)
+                    .unwrap_err()
+                    .code,
+                "ATT-004"
+            );
+        }
     }
 }

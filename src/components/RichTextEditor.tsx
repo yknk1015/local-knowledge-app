@@ -1,4 +1,6 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
+import Image from "@tiptap/extension-image";
 import { EditorContent, useEditor, type JSONContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { TableKit } from "@tiptap/extension-table";
@@ -7,6 +9,32 @@ const EMPTY_DOCUMENT: JSONContent = {
   type: "doc",
   content: [{ type: "paragraph" }],
 };
+
+export interface ManagedImageSource {
+  id: string;
+  assetPath: string;
+  altText: string;
+}
+
+const ManagedImage = Image.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      attachmentId: {
+        default: null,
+        parseHTML: (element) => element.getAttribute("data-attachment-id"),
+        renderHTML: (attributes) =>
+          attributes.attachmentId
+            ? { "data-attachment-id": attributes.attachmentId as string }
+            : {},
+      },
+    };
+  },
+}).configure({
+  allowBase64: false,
+  inline: false,
+  HTMLAttributes: { class: "faq-inline-image" },
+});
 
 const extensions = [
   StarterKit.configure({
@@ -25,28 +53,107 @@ const extensions = [
     },
   }),
   TableKit.configure({ table: { resizable: true } }),
+  ManagedImage,
 ];
+
+function transformImages(
+  value: Record<string, unknown>,
+  transform: (attributes: Record<string, unknown>) => Record<string, unknown>,
+): Record<string, unknown> {
+  const visit = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(visit);
+    if (!node || typeof node !== "object") return node;
+    const object = node as Record<string, unknown>;
+    const copy = Object.fromEntries(Object.entries(object).map(([key, item]) => [key, visit(item)]));
+    if (copy.type === "image" && copy.attrs && typeof copy.attrs === "object") {
+      copy.attrs = transform(copy.attrs as Record<string, unknown>);
+    }
+    return copy;
+  };
+  return visit(value) as Record<string, unknown>;
+}
+
+export function hydrateManagedImages(
+  value: Record<string, unknown>,
+  sources: ManagedImageSource[],
+): Record<string, unknown> {
+  const paths = new Map(sources.map((source) => [source.id, source.assetPath]));
+  return transformImages(value, (attributes) => {
+    const id = typeof attributes.attachmentId === "string" ? attributes.attachmentId : "";
+    const path = paths.get(id);
+    return path ? { ...attributes, src: convertFileSrc(path) } : attributes;
+  });
+}
+
+export function dehydrateManagedImages(value: Record<string, unknown>): Record<string, unknown> {
+  return transformImages(value, (attributes) => {
+    const id = typeof attributes.attachmentId === "string" ? attributes.attachmentId : "";
+    return id ? { ...attributes, src: `knowledge-attachment:${id}` } : attributes;
+  });
+}
 
 export function stripLinksFromPastedHtml(html: string): string {
   const pastedDocument = new DOMParser().parseFromString(html, "text/html");
   pastedDocument.querySelectorAll("a").forEach((anchor) => {
     anchor.replaceWith(...Array.from(anchor.childNodes));
   });
+  pastedDocument.querySelectorAll("img").forEach((image) => image.remove());
   return pastedDocument.body.innerHTML;
 }
 
 export function RichTextEditor({
   value,
   onChange,
+  imageSources = [],
+  onRequestImage,
+  onDiscardImage,
   disabled = false,
 }: {
   value?: Record<string, unknown>;
   onChange: (document: Record<string, unknown>) => void;
+  imageSources?: ManagedImageSource[];
+  onRequestImage?: (file?: File) => Promise<ManagedImageSource | null>;
+  onDiscardImage?: (id: string) => Promise<void>;
   disabled?: boolean;
 }) {
+  const imageRequestRef = useRef(onRequestImage);
+  imageRequestRef.current = onRequestImage;
+  const sourceRef = useRef(imageSources);
+  sourceRef.current = imageSources;
+
+  const insertImage = async (file?: File) => {
+    const request = imageRequestRef.current;
+    if (!request || !editor) return;
+    const image = await request(file);
+    if (!image) return;
+    const altText = window.prompt(
+      "画像の内容を短く説明してください（代替テキスト）",
+      image.altText,
+    );
+    if (altText === null) {
+      await onDiscardImage?.(image.id);
+      return;
+    }
+    editor
+      .chain()
+      .focus()
+      .insertContent({
+        type: "image",
+        attrs: {
+          src: convertFileSrc(image.assetPath),
+          alt: altText,
+          title: null,
+          attachmentId: image.id,
+        },
+      })
+      .run();
+  };
+
   const editor = useEditor({
     extensions,
-    content: (value as JSONContent | undefined) ?? EMPTY_DOCUMENT,
+    content: value
+      ? (hydrateManagedImages(value, imageSources) as JSONContent)
+      : EMPTY_DOCUMENT,
     editable: !disabled,
     immediatelyRender: false,
     editorProps: {
@@ -55,18 +162,43 @@ export function RichTextEditor({
         "aria-label": "FAQの回答",
       },
       transformPastedHTML: stripLinksFromPastedHtml,
+      handlePaste: (_view, event) => {
+        const imageFile = Array.from(event.clipboardData?.files ?? []).find((file) =>
+          file.type.startsWith("image/"),
+        );
+        if (!imageFile || !imageRequestRef.current) return false;
+        void insertImage(imageFile);
+        return true;
+      },
+      handleDrop: (_view, event) => {
+        if (event.dataTransfer?.files.length) {
+          event.preventDefault();
+          return true;
+        }
+        return false;
+      },
     },
     onUpdate: ({ editor: currentEditor }) => {
-      onChange(currentEditor.getJSON() as Record<string, unknown>);
+      onChange(
+        dehydrateManagedImages(currentEditor.getJSON() as Record<string, unknown>),
+      );
     },
   });
 
   useEffect(() => {
     if (!editor || !value) return;
-    const current = JSON.stringify(editor.getJSON());
+    const current = JSON.stringify(
+      dehydrateManagedImages(editor.getJSON() as Record<string, unknown>),
+    );
     const next = JSON.stringify(value);
-    if (current !== next) editor.commands.setContent(value as JSONContent);
-  }, [editor, value]);
+    if (current !== next) {
+      editor.commands.setContent(hydrateManagedImages(value, sourceRef.current) as JSONContent);
+    }
+  }, [editor, imageSources, value]);
+
+  useEffect(() => {
+    if (editor) editor.setEditable(!disabled);
+  }, [disabled, editor]);
 
   if (!editor) return <div className="rich-editor loading">エディターを準備しています…</div>;
 
@@ -85,6 +217,12 @@ export function RichTextEditor({
     editor.chain().focus().extendMarkRange("link").setLink({ href }).run();
   };
 
+  const editImageAlt = () => {
+    const current = editor.getAttributes("image").alt as string | undefined;
+    const next = window.prompt("画像の内容を短く説明してください（代替テキスト）", current ?? "");
+    if (next !== null) editor.chain().focus().updateAttributes("image", { alt: next }).run();
+  };
+
   return (
     <div className="rich-editor">
       <div className="editor-toolbar" aria-label="回答の書式">
@@ -94,6 +232,9 @@ export function RichTextEditor({
         <button type="button" onClick={() => editor.chain().focus().toggleBulletList().run()} className={editor.isActive("bulletList") ? "active" : ""}>箇条書き</button>
         <button type="button" onClick={() => editor.chain().focus().toggleOrderedList().run()} className={editor.isActive("orderedList") ? "active" : ""}>番号付き</button>
         <button type="button" onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}>表を追加</button>
+        <button type="button" onClick={() => void insertImage()} disabled={!onRequestImage}>画像を追加</button>
+        {editor.isActive("image") && <button type="button" onClick={editImageAlt}>画像の説明</button>}
+        {editor.isActive("image") && <button type="button" onClick={() => editor.chain().focus().deleteSelection().run()}>画像を削除</button>}
         <button type="button" onClick={setLink} className={editor.isActive("link") ? "active" : ""}>参考URL</button>
         <button type="button" onClick={() => editor.chain().focus().extendMarkRange("link").unsetLink().run()}>リンク解除</button>
         <span className="toolbar-spacer" />
@@ -105,18 +246,26 @@ export function RichTextEditor({
   );
 }
 
-export function RichTextViewer({ value }: { value: Record<string, unknown> }) {
+export function RichTextViewer({
+  value,
+  imageSources = [],
+}: {
+  value: Record<string, unknown>;
+  imageSources?: ManagedImageSource[];
+}) {
   const editor = useEditor({
     extensions,
-    content: value as JSONContent,
+    content: hydrateManagedImages(value, imageSources) as JSONContent,
     editable: false,
     immediatelyRender: false,
     editorProps: { attributes: { class: "rich-viewer-content" } },
   });
 
   useEffect(() => {
-    if (editor) editor.commands.setContent(value as JSONContent);
-  }, [editor, value]);
+    if (editor) {
+      editor.commands.setContent(hydrateManagedImages(value, imageSources) as JSONContent);
+    }
+  }, [editor, imageSources, value]);
 
   const stopExternalNavigation = (target: EventTarget | null) => {
     if (target instanceof Element && target.closest("a")) {

@@ -146,7 +146,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--green); box-shad
 .validation-summary { padding: 16px 20px; margin-bottom: 18px; color: #7f3030; background: var(--red-soft); border: 1px solid #efcfcc; border-radius: 10px; }
 .validation-summary ul { margin: 8px 0 0; padding-left: 20px; }
 .save-feedback { scroll-margin-top: 92px; outline: none; }
-.url-help { margin: 10px 2px 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.url-help, .image-help { margin: 10px 2px 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
 
 .rich-editor { border: 1px solid #cfd8d1; border-radius: 10px; background: white; overflow: hidden; }
 .rich-editor:focus-within { border-color: var(--green); box-shadow: 0 0 0 3px rgba(36,106,80,.08); }
@@ -161,6 +161,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--green); box-shad
 .rich-editor-content td, .rich-editor-content th, .rich-viewer-content td, .rich-viewer-content th { min-width: 80px; padding: 8px 10px; border: 1px solid #bdc9c1; vertical-align: top; }
 .rich-editor-content th, .rich-viewer-content th { background: #eef4ef; }
 .rich-editor-content a, .rich-viewer-content a { color: #1769aa; text-decoration: underline; }
+.rich-editor-content .faq-inline-image, .rich-viewer-content .faq-inline-image { display: block; max-width: 100%; max-height: 720px; width: auto; height: auto; margin: 18px auto; border: 1px solid #d5ddd7; border-radius: 8px; object-fit: contain; background: #f7f9f7; }
+.rich-editor-content .faq-inline-image.ProseMirror-selectednode { outline: 3px solid rgba(36,106,80,.32); border-color: var(--green); }
 .rich-editor-content .selectedCell::after { content: ""; position: absolute; inset: 0; background: rgba(36,106,80,.12); pointer-events: none; }
 
 .detail-actions { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }

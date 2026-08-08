@@ -8,11 +8,13 @@ use crate::{
     models::{
         Article, ArticleListItem, BackupOverview, BackupPreview, BackupResult, Category,
         CreateCategoryInput, CreateFullBackupInput, ManagementArticlePage, ManagementArticlesInput,
-        RestoreResult, SaveArticleInput, SearchArticlesInput, SystemInfo, UpdateCategoryInput,
+        RestoreResult, SaveArticleInput, SearchArticlesInput, StageArticleImageBytesInput,
+        StagedArticleImage, SystemInfo, UpdateCategoryInput,
     },
     repositories::database::ArticleRecord,
-    services::{backup, rich_content},
+    services::{attachments, backup, rich_content},
 };
+use uuid::Uuid;
 
 fn lock_database<'state, 'managed>(
     state: &'state State<'managed, AppState>,
@@ -59,7 +61,9 @@ pub fn delete_category(id: String, state: State<'_, AppState>) -> AppResult<()> 
 
 #[tauri::command]
 pub fn get_article(id: String, state: State<'_, AppState>) -> AppResult<Article> {
-    lock_database(&state)?.get_article(&id)
+    let mut article = lock_database(&state)?.get_article(&id)?;
+    attachments::hydrate_article_paths(&state.data_root, &mut article)?;
+    Ok(article)
 }
 
 #[tauri::command]
@@ -73,8 +77,11 @@ pub fn search_articles(
 #[tauri::command]
 pub fn save_article(input: SaveArticleInput, state: State<'_, AppState>) -> AppResult<Article> {
     validate_article_fields(&input)?;
-    let body_plain_text = rich_content::validate_and_extract(&input.body_doc)?;
-    if input.status == "published" && body_plain_text.trim().is_empty() {
+    let rich_content = rich_content::validate_and_extract_with_attachments(&input.body_doc)?;
+    if input.status == "published"
+        && rich_content.plain_text.trim().is_empty()
+        && rich_content.attachments.is_empty()
+    {
         return Err(AppError::new(
             "ART-001",
             "公開するFAQには回答が必要です。",
@@ -82,16 +89,66 @@ pub fn save_article(input: SaveArticleInput, state: State<'_, AppState>) -> AppR
         ));
     }
 
-    lock_database(&state)?.save_article(ArticleRecord {
-        id: input.id.as_deref(),
+    let is_new = input.id.is_none();
+    let article_id = input
+        .id
+        .clone()
+        .unwrap_or_else(|| Uuid::now_v7().to_string());
+    let mut database = lock_database(&state)?;
+    let existing = if is_new {
+        Vec::new()
+    } else {
+        database.get_article(&article_id)?.attachments
+    };
+    let prepared = attachments::prepare(
+        &state.data_root,
+        &article_id,
+        &rich_content.attachments,
+        &existing,
+    )?;
+    let saved = database.save_article(ArticleRecord {
+        id: &article_id,
+        is_new,
         category_id: &input.category_id,
         title: input.title.trim(),
         summary: input.summary.trim(),
         body_doc: &input.body_doc,
-        body_plain_text: &body_plain_text,
+        body_plain_text: &rich_content.plain_text,
         status: &input.status,
         importance: input.importance,
-    })
+        attachments: &prepared.records,
+    });
+    let mut article = match saved {
+        Ok(article) => article,
+        Err(error) => {
+            attachments::rollback(&prepared);
+            return Err(error);
+        }
+    };
+    attachments::commit(&state.data_root, &prepared);
+    attachments::hydrate_article_paths(&state.data_root, &mut article)?;
+    Ok(article)
+}
+
+#[tauri::command]
+pub fn stage_article_image(
+    path: String,
+    state: State<'_, AppState>,
+) -> AppResult<StagedArticleImage> {
+    attachments::stage_from_path(&state.data_root, &PathBuf::from(path))
+}
+
+#[tauri::command]
+pub fn stage_article_image_bytes(
+    input: StageArticleImageBytesInput,
+    state: State<'_, AppState>,
+) -> AppResult<StagedArticleImage> {
+    attachments::stage_bytes(&state.data_root, &input.original_name, &input.bytes)
+}
+
+#[tauri::command]
+pub fn discard_staged_article_image(id: String, state: State<'_, AppState>) {
+    attachments::discard_stage(&state.data_root, &id);
 }
 
 #[tauri::command]
@@ -120,12 +177,16 @@ pub fn list_articles_for_management(
 
 #[tauri::command]
 pub fn delete_article(id: String, state: State<'_, AppState>) -> AppResult<Article> {
-    lock_database(&state)?.delete_article(&id)
+    let mut article = lock_database(&state)?.delete_article(&id)?;
+    attachments::hydrate_article_paths(&state.data_root, &mut article)?;
+    Ok(article)
 }
 
 #[tauri::command]
 pub fn restore_article(id: String, state: State<'_, AppState>) -> AppResult<Article> {
-    lock_database(&state)?.restore_article(&id)
+    let mut article = lock_database(&state)?.restore_article(&id)?;
+    attachments::hydrate_article_paths(&state.data_root, &mut article)?;
+    Ok(article)
 }
 
 #[tauri::command]

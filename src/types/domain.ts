@@ -25,6 +25,28 @@ export interface Article extends ArticleListItem {
   bodyPlainText: string;
   createdAt: string;
   deletedAt: string | null;
+  attachments: ArticleAttachment[];
+}
+
+export interface ArticleAttachment {
+  id: string;
+  originalName: string;
+  mediaType: string;
+  byteSize: number;
+  sha256: string;
+  altText: string;
+  assetPath: string;
+  createdAt: string;
+}
+
+export interface StagedArticleImage {
+  id: string;
+  originalName: string;
+  mediaType: string;
+  byteSize: number;
+  sha256: string;
+  altText: string;
+  assetPath: string;
 }
 
 export interface SaveArticleInput {
