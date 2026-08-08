@@ -7,8 +7,8 @@ use crate::{
     errors::{AppError, AppResult},
     models::{
         Article, ArticleListItem, BackupOverview, BackupPreview, BackupResult, Category,
-        CreateCategoryInput, CreateFullBackupInput, RestoreResult, SaveArticleInput,
-        SearchArticlesInput, SystemInfo,
+        CreateCategoryInput, CreateFullBackupInput, ManagementArticlePage, ManagementArticlesInput,
+        RestoreResult, SaveArticleInput, SearchArticlesInput, SystemInfo,
     },
     repositories::database::ArticleRecord,
     services::{backup, rich_content},
@@ -79,6 +79,40 @@ pub fn save_article(input: SaveArticleInput, state: State<'_, AppState>) -> AppR
         status: &input.status,
         importance: input.importance,
     })
+}
+
+#[tauri::command]
+pub fn list_articles_for_management(
+    input: ManagementArticlesInput,
+    state: State<'_, AppState>,
+) -> AppResult<ManagementArticlePage> {
+    if input.page < 1 {
+        return Err(AppError::new(
+            "ART-001",
+            "管理一覧のページ指定が正しくありません。",
+            "一覧を開き直してください。",
+        ));
+    }
+    if let Some(status) = input.status.as_deref() {
+        if !matches!(status, "draft" | "published" | "archived") {
+            return Err(AppError::new(
+                "ART-001",
+                "FAQ状態の絞り込み指定が正しくありません。",
+                "状態を選び直してください。",
+            ));
+        }
+    }
+    lock_database(&state)?.list_articles_for_management(&input)
+}
+
+#[tauri::command]
+pub fn delete_article(id: String, state: State<'_, AppState>) -> AppResult<Article> {
+    lock_database(&state)?.delete_article(&id)
+}
+
+#[tauri::command]
+pub fn restore_article(id: String, state: State<'_, AppState>) -> AppResult<Article> {
+    lock_database(&state)?.restore_article(&id)
 }
 
 #[tauri::command]

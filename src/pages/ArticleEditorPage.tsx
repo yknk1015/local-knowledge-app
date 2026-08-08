@@ -41,6 +41,14 @@ export function ArticleEditorPage() {
         }
         const article = await knowledgeApi.getArticle(articleId);
         if (!active) return;
+        if (article.deletedAt) {
+          setError({
+            code: "ART-006",
+            message: "削除済みFAQは編集できません。",
+            action: "FAQ詳細画面またはFAQ管理画面から復元してから編集してください。",
+          });
+          return;
+        }
         setTitle(article.title);
         setCategoryId(article.categoryId);
         setSummary(article.summary);

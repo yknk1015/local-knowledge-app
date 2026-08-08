@@ -24,6 +24,7 @@ export interface Article extends ArticleListItem {
   bodyDoc: Record<string, unknown>;
   bodyPlainText: string;
   createdAt: string;
+  deletedAt: string | null;
 }
 
 export interface SaveArticleInput {
@@ -40,6 +41,25 @@ export interface SearchArticlesInput {
   query: string;
   categoryId?: string;
   includeDrafts: boolean;
+}
+
+export interface ManagementArticlesInput {
+  query: string;
+  categoryId?: string;
+  status?: ArticleStatus;
+  deleted: boolean;
+  page: number;
+}
+
+export interface ManagementArticleListItem extends ArticleListItem {
+  deletedAt: string | null;
+}
+
+export interface ManagementArticlePage {
+  items: ManagementArticleListItem[];
+  total: number;
+  page: number;
+  pageSize: number;
 }
 
 export interface SystemInfo {

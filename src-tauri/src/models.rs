@@ -46,6 +46,7 @@ pub struct Article {
     pub importance: i64,
     pub created_at: String,
     pub updated_at: String,
+    pub deleted_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -66,6 +67,39 @@ pub struct SearchArticlesInput {
     pub query: String,
     pub category_id: Option<String>,
     pub include_drafts: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagementArticlesInput {
+    pub query: String,
+    pub category_id: Option<String>,
+    pub status: Option<String>,
+    pub deleted: bool,
+    pub page: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagementArticleListItem {
+    pub id: String,
+    pub category_id: String,
+    pub category_name: String,
+    pub title: String,
+    pub summary: String,
+    pub status: String,
+    pub importance: i64,
+    pub updated_at: String,
+    pub deleted_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagementArticlePage {
+    pub items: Vec<ManagementArticleListItem>,
+    pub total: i64,
+    pub page: i64,
+    pub page_size: i64,
 }
 
 #[derive(Debug, Serialize)]

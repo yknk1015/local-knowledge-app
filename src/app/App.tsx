@@ -8,6 +8,7 @@ const ArticleDetailPage = lazy(() => import("../pages/ArticleDetailPage").then((
 const ArticleEditorPage = lazy(() => import("../pages/ArticleEditorPage").then((module) => ({ default: module.ArticleEditorPage })));
 const CategoriesPage = lazy(() => import("../pages/CategoriesPage").then((module) => ({ default: module.CategoriesPage })));
 const SettingsPage = lazy(() => import("../pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
+const ArticleManagementPage = lazy(() => import("../pages/ArticleManagementPage").then((module) => ({ default: module.ArticleManagementPage })));
 
 export function App() {
   return (
@@ -19,6 +20,7 @@ export function App() {
           <Route path="/articles/:articleId" element={<ArticleDetailPage />} />
           <Route path="/articles/:articleId/edit" element={<ArticleEditorPage />} />
           <Route path="/categories" element={<CategoriesPage />} />
+          <Route path="/manage" element={<ArticleManagementPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/search" replace />} />
         </Route>

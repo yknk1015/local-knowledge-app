@@ -76,6 +76,8 @@ a { color: inherit; }
 .button.primary:hover:not(:disabled) { background: var(--green-dark); }
 .button.secondary { color: var(--green-dark); background: white; border-color: #b9cec2; }
 .button.ghost { color: var(--muted); background: transparent; border-color: var(--line); }
+.button.danger-outline { color: var(--red); background: white; border-color: #ddb6b3; }
+.button.danger-outline:hover:not(:disabled) { background: var(--red-soft); }
 .button.large { min-height: 48px; padding: 0 26px; }
 .text-link { color: var(--green); font-weight: 700; text-decoration: none; }
 
@@ -153,6 +155,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--green); box-shad
 .rich-editor-content .selectedCell::after { content: ""; position: absolute; inset: 0; background: rgba(36,106,80,.12); pointer-events: none; }
 
 .detail-actions { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+.detail-action-buttons { display: flex; gap: 9px; }
 .detail-header { padding: 30px 34px; background: var(--surface); border: 1px solid var(--line); border-radius: 15px 15px 0 0; }
 .detail-header h1 { margin: 18px 0 12px; font: 700 32px/1.4 Georgia, "Yu Mincho", serif; }
 .detail-summary { max-width: 850px; color: #58675f; font-size: 16px; line-height: 1.8; }
@@ -164,6 +167,37 @@ input:focus, select:focus, textarea:focus { border-color: var(--green); box-shad
 .detail-safety-note { display: flex; gap: 24px; margin-top: 18px; padding: 18px 22px; background: #fbf5e9; border: 1px solid #eddfc5; border-radius: 10px; }
 .detail-safety-note strong { color: var(--amber); white-space: nowrap; }
 .detail-safety-note p { margin: 0; color: #6f6657; font-size: 13px; }
+.deleted-article-panel { display: grid; justify-items: center; padding: 46px; text-align: center; }
+.deleted-symbol { width: 56px; height: 56px; display: grid; place-items: center; margin-bottom: 15px; color: var(--green); background: var(--green-soft); border-radius: 50%; font-size: 30px; }
+.deleted-article-panel h1 { margin: 8px 0 10px; font: 700 28px Georgia, "Yu Mincho", serif; }
+.deleted-article-panel > p { max-width: 650px; margin: 0; color: var(--muted); line-height: 1.8; }
+.deleted-article-panel dl { display: grid; grid-template-columns: 1fr 1fr; min-width: 480px; margin: 24px 0; border: 1px solid var(--line); border-radius: 9px; }
+.deleted-article-panel dl div { padding: 12px 18px; }
+.deleted-article-panel dl div + div { border-left: 1px solid var(--line); }
+.deleted-article-panel dt { color: var(--muted); font-size: 10px; }
+.deleted-article-panel dd { margin: 4px 0 0; font-weight: 700; }
+
+.management-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+.management-tabs button { min-height: 40px; padding: 0 18px; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 9px; cursor: pointer; font-weight: 700; }
+.management-tabs button.active { color: var(--green-dark); background: white; border-color: #bdd2c6; box-shadow: 0 3px 10px rgba(29,57,45,.06); }
+.management-tabs button.active.danger { color: var(--red); border-color: #e1bfbd; }
+.management-filters { display: grid; grid-template-columns: minmax(260px, 1fr) 230px 170px auto; align-items: end; gap: 12px; padding: 17px; }
+.management-filters label > span { display: block; margin-bottom: 6px; color: var(--muted); font-size: 11px; font-weight: 700; }
+.management-notice { margin-top: 14px; }
+.management-result-heading { display: flex; align-items: center; justify-content: space-between; min-height: 58px; padding: 9px 3px 0; }
+.management-result-heading span { color: var(--muted); font-size: 12px; }
+.management-table-wrap { overflow: hidden; }
+.management-table { width: 100%; border-collapse: collapse; }
+.management-table th { padding: 12px 15px; color: var(--muted); background: #f5f8f5; border-bottom: 1px solid var(--line); text-align: left; font-size: 11px; }
+.management-table td { padding: 14px 15px; border-bottom: 1px solid #edf0ed; vertical-align: middle; font-size: 13px; }
+.management-table tr:last-child td { border-bottom: 0; }
+.management-table td:first-child { width: 40%; }
+.management-table td:first-child a { color: var(--green-dark); font-weight: 800; text-decoration: none; }
+.management-table td:first-child small { display: block; margin-top: 4px; max-width: 460px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.management-row-actions { display: flex; justify-content: flex-end; gap: 7px; white-space: nowrap; }
+.management-row-actions .button { min-height: 35px; padding: 0 12px; font-size: 12px; }
+.pagination { display: flex; align-items: center; justify-content: center; gap: 16px; margin-top: 18px; }
+.pagination span { color: var(--muted); font-size: 12px; }
 
 .backup-panel { margin-bottom: 22px; overflow: hidden; }
 .backup-intro { display: flex; align-items: center; justify-content: space-between; gap: 28px; padding: 26px; background: linear-gradient(135deg, #f8fcf9, #edf6f0); border-bottom: 1px solid #d4e3da; }

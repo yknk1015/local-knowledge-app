@@ -8,7 +8,10 @@ use uuid::Uuid;
 
 use crate::{
     errors::{AppError, AppResult},
-    models::{Article, ArticleListItem, BackupCounts, Category, SearchArticlesInput},
+    models::{
+        Article, ArticleListItem, BackupCounts, Category, ManagementArticleListItem,
+        ManagementArticlePage, ManagementArticlesInput, SearchArticlesInput,
+    },
 };
 
 const INITIAL_MIGRATION: &str = include_str!("../../migrations/0001_initial.sql");
@@ -381,10 +384,11 @@ impl Database {
             .query_row(
                 r#"
                 SELECT a.id, a.category_id, c.name, a.title, a.summary, a.body_doc_json,
-                       a.body_plain_text, a.status, a.importance, a.created_at, a.updated_at
+                       a.body_plain_text, a.status, a.importance, a.created_at, a.updated_at,
+                       a.deleted_at
                   FROM articles a
                   JOIN categories c ON c.id = a.category_id
-                 WHERE a.id = ?1 AND a.deleted_at IS NULL
+                 WHERE a.id = ?1
                 "#,
                 [id],
                 article_from_row,
@@ -442,6 +446,128 @@ impl Database {
         )?;
         rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
     }
+
+    pub fn list_articles_for_management(
+        &self,
+        input: &ManagementArticlesInput,
+    ) -> AppResult<ManagementArticlePage> {
+        const PAGE_SIZE: i64 = 50;
+        let page = input.page.max(1);
+        let offset = (page - 1) * PAGE_SIZE;
+        let normalized_query = normalize(input.query.trim());
+        let like_query = format!("%{}%", escape_like(&normalized_query));
+        let category_id = input.category_id.as_deref();
+        let status = input.status.as_deref();
+        let mut statement = self.connection.prepare(
+            r#"
+            WITH RECURSIVE selected_categories(id) AS (
+                SELECT id FROM categories WHERE id = ?2
+                UNION ALL
+                SELECT c.id FROM categories c
+                JOIN selected_categories parent ON c.parent_id = parent.id
+            ), filtered AS (
+                SELECT a.id, a.category_id, c.name AS category_name, a.title, a.summary,
+                       a.status, a.importance, a.updated_at, a.deleted_at
+                  FROM articles a
+                  JOIN categories c ON c.id = a.category_id
+                  JOIN article_search_documents search_doc ON search_doc.article_id = a.id
+                 WHERE ((?4 = 1 AND a.deleted_at IS NOT NULL) OR (?4 = 0 AND a.deleted_at IS NULL))
+                   AND (?2 IS NULL OR a.category_id IN (SELECT id FROM selected_categories))
+                   AND (?3 IS NULL OR a.status = ?3)
+                   AND (?1 = '' OR search_doc.title LIKE ?5 ESCAPE '\'
+                        OR search_doc.summary LIKE ?5 ESCAPE '\'
+                        OR search_doc.body LIKE ?5 ESCAPE '\')
+            )
+            SELECT id, category_id, category_name, title, summary, status, importance,
+                   updated_at, deleted_at, COUNT(*) OVER()
+              FROM filtered
+             ORDER BY updated_at DESC
+             LIMIT ?6 OFFSET ?7
+            "#,
+        )?;
+        let rows = statement.query_map(
+            params![
+                normalized_query,
+                category_id,
+                status,
+                input.deleted,
+                like_query,
+                PAGE_SIZE,
+                offset,
+            ],
+            |row| {
+                Ok((
+                    ManagementArticleListItem {
+                        id: row.get(0)?,
+                        category_id: row.get(1)?,
+                        category_name: row.get(2)?,
+                        title: row.get(3)?,
+                        summary: row.get(4)?,
+                        status: row.get(5)?,
+                        importance: row.get(6)?,
+                        updated_at: row.get(7)?,
+                        deleted_at: row.get(8)?,
+                    },
+                    row.get::<_, i64>(9)?,
+                ))
+            },
+        )?;
+        let results = rows.collect::<Result<Vec<_>, _>>()?;
+        let total = results.first().map(|(_, total)| *total).unwrap_or(0);
+        Ok(ManagementArticlePage {
+            items: results.into_iter().map(|(article, _)| article).collect(),
+            total,
+            page,
+            page_size: PAGE_SIZE,
+        })
+    }
+
+    pub fn delete_article(&mut self, id: &str) -> AppResult<Article> {
+        let transaction = self.connection.transaction()?;
+        let now = Utc::now().to_rfc3339();
+        let updated = transaction.execute(
+            "UPDATE articles SET deleted_at = ?2, updated_at = ?2 WHERE id = ?1 AND deleted_at IS NULL",
+            params![id, now],
+        )?;
+        if updated == 0 {
+            return Err(article_not_found());
+        }
+        transaction.execute("DELETE FROM article_search_fts WHERE article_id = ?1", [id])?;
+        transaction.commit()?;
+        self.get_article(id)
+    }
+
+    pub fn restore_article(&mut self, id: &str) -> AppResult<Article> {
+        let transaction = self.connection.transaction()?;
+        let now = Utc::now().to_rfc3339();
+        let updated = transaction.execute(
+            "UPDATE articles SET deleted_at = NULL, updated_at = ?2 WHERE id = ?1 AND deleted_at IS NOT NULL",
+            params![id, now],
+        )?;
+        if updated == 0 {
+            return Err(AppError::new(
+                "ART-005",
+                "復元できる削除済みFAQが見つかりません。",
+                "FAQ管理画面を更新して、削除済みFAQを選び直してください。",
+            ));
+        }
+        transaction.execute("DELETE FROM article_search_fts WHERE article_id = ?1", [id])?;
+        transaction.execute(
+            r#"
+            INSERT INTO article_search_fts(
+                article_id, title, summary, body, symptoms, causes, targets,
+                error_codes, tags, search_terms
+            )
+            SELECT article_id, title, summary, body, symptoms, causes, targets,
+                   error_codes, tags, search_terms
+              FROM article_search_documents
+             WHERE article_id = ?1
+            "#,
+            [id],
+        )?;
+        transaction.commit()?;
+        self.get_article(id)
+    }
 }
 
 fn article_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Article> {
@@ -465,6 +591,7 @@ fn article_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Article> {
         importance: row.get(8)?,
         created_at: row.get(9)?,
         updated_at: row.get(10)?,
+        deleted_at: row.get(11)?,
     })
 }
 
@@ -568,5 +695,61 @@ mod tests {
     #[test]
     fn normalizes_width_case_and_spaces() {
         assert_eq!(normalize("  ＰＣ  Setup "), "pc setup");
+    }
+
+    #[test]
+    fn logically_deletes_and_restores_an_article() {
+        let (_directory, mut database) = temporary_database();
+        let category = database.create_category("PC", None).unwrap();
+        let body = json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"確認します"}]}]});
+        let article = database
+            .save_article(ArticleRecord {
+                id: None,
+                category_id: &category.id,
+                title: "ネットワーク確認",
+                summary: "接続を確認します",
+                body_doc: &body,
+                body_plain_text: "確認します",
+                status: "published",
+                importance: 1,
+            })
+            .unwrap();
+
+        let deleted = database.delete_article(&article.id).unwrap();
+        assert!(deleted.deleted_at.is_some());
+        assert!(
+            database
+                .search_articles(&SearchArticlesInput {
+                    query: "ネットワーク".into(),
+                    category_id: None,
+                    include_drafts: true,
+                })
+                .unwrap()
+                .is_empty()
+        );
+        let deleted_page = database
+            .list_articles_for_management(&ManagementArticlesInput {
+                query: "ネットワーク".into(),
+                category_id: None,
+                status: None,
+                deleted: true,
+                page: 1,
+            })
+            .unwrap();
+        assert_eq!(deleted_page.total, 1);
+
+        let restored = database.restore_article(&article.id).unwrap();
+        assert!(restored.deleted_at.is_none());
+        assert_eq!(
+            database
+                .search_articles(&SearchArticlesInput {
+                    query: "ネットワーク".into(),
+                    category_id: None,
+                    include_drafts: false,
+                })
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }

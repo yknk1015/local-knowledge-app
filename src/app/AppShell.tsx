@@ -3,6 +3,7 @@ import { NavLink, Outlet } from "react-router-dom";
 const navItems = [
   { to: "/search", label: "FAQを探す", icon: "⌕" },
   { to: "/articles/new", label: "新しいFAQ", icon: "+" },
+  { to: "/manage", label: "FAQの管理", icon: "☷" },
   { to: "/categories", label: "分類の管理", icon: "▦" },
   { to: "/settings", label: "設定・情報", icon: "⚙" },
 ];

@@ -7,6 +7,8 @@ import type {
   BackupPreview,
   BackupResult,
   Category,
+  ManagementArticlePage,
+  ManagementArticlesInput,
   SaveArticleInput,
   SearchArticlesInput,
   RestoreResult,
@@ -61,6 +63,10 @@ export const knowledgeApi = {
     call<ArticleListItem[]>("search_articles", { input }),
   getArticle: (id: string) => call<Article>("get_article", { id }),
   saveArticle: (input: SaveArticleInput) => call<Article>("save_article", { input }),
+  listArticlesForManagement: (input: ManagementArticlesInput) =>
+    call<ManagementArticlePage>("list_articles_for_management", { input }),
+  deleteArticle: (id: string) => call<Article>("delete_article", { id }),
+  restoreArticle: (id: string) => call<Article>("restore_article", { id }),
   getBackupOverview: () => call<BackupOverview>("get_backup_overview"),
   createFullBackup: (destinationPath: string, displayName: string, overwrite = false) =>
     call<BackupResult>("create_full_backup", {

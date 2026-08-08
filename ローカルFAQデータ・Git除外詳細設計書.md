@@ -7,7 +7,7 @@
 | 文書名 | ローカルFAQデータ・Git除外詳細設計書 |
 | 版 | 0.3（フルバックアップ保存・復元反映版） |
 | 作成日 | 2026-08-08 |
-| 上位文書 | `FAQシステム要件定義書.md` v0.5、`FAQシステム基本設計書.md` v0.7 |
+| 上位文書 | `FAQシステム要件定義書.md` v0.5、`FAQシステム基本設計書.md` v0.8 |
 | 対象 | 利用者が作成したFAQデータをGitHub等へ含めないための保存・検査設計 |
 
 ## 2. 目的
@@ -365,7 +365,7 @@ GitHub等へpushした場合、通常の削除コミットだけでは履歴に�
 
 - `AGENTS.md`
 - `FAQシステム要件定義書.md` v0.5
-- `FAQシステム基本設計書.md` v0.7
+- `FAQシステム基本設計書.md` v0.8
 - [Tauri 2：appLocalDataDir](https://v2.tauri.app/reference/javascript/api/namespacepath/#applocaldatadir)
 - [Tauri 2：ファイルシステム](https://v2.tauri.app/plugin/file-system/)
 - [Git：gitignore](https://git-scm.com/docs/gitignore)
