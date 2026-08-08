@@ -205,14 +205,7 @@ impl Database {
     }
 
     pub fn create_category(&mut self, name: &str, parent_id: Option<&str>) -> AppResult<Category> {
-        let name = name.trim();
-        if name.is_empty() || name.chars().count() > 100 {
-            return Err(AppError::new(
-                "CAT-001",
-                "分類名は1～100文字で入力してください。",
-                "分類名を確認して、もう一度作成してください。",
-            ));
-        }
+        let name = validate_category_name(name)?;
 
         let transaction = self.connection.transaction()?;
         let depth = match parent_id {
@@ -275,6 +268,178 @@ impl Database {
             sort_order,
             article_count: 0,
         })
+    }
+
+    pub fn update_category(
+        &mut self,
+        id: &str,
+        name: &str,
+        parent_id: Option<&str>,
+    ) -> AppResult<Category> {
+        let name = validate_category_name(name)?;
+        let transaction = self.connection.transaction()?;
+        let current = transaction
+            .query_row(
+                "SELECT parent_id, depth FROM categories WHERE id = ?1",
+                [id],
+                |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()?
+            .ok_or_else(category_not_found)?;
+
+        if parent_id == Some(id) {
+            return Err(category_cycle_error());
+        }
+        if let Some(parent_id) = parent_id {
+            let parent_is_descendant: bool = transaction.query_row(
+                r#"
+                WITH RECURSIVE descendants(id) AS (
+                    SELECT id FROM categories WHERE parent_id = ?1
+                    UNION ALL
+                    SELECT child.id FROM categories child
+                    JOIN descendants parent ON child.parent_id = parent.id
+                )
+                SELECT EXISTS(SELECT 1 FROM descendants WHERE id = ?2)
+                "#,
+                params![id, parent_id],
+                |row| row.get(0),
+            )?;
+            if parent_is_descendant {
+                return Err(category_cycle_error());
+            }
+        }
+
+        let target_depth = match parent_id {
+            Some(parent_id) => transaction
+                .query_row(
+                    "SELECT depth + 1 FROM categories WHERE id = ?1",
+                    [parent_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()?
+                .ok_or_else(category_not_found)?,
+            None => 1,
+        };
+        let subtree_relative_depth: i64 = transaction.query_row(
+            r#"
+            WITH RECURSIVE descendants(id, depth) AS (
+                SELECT id, depth FROM categories WHERE id = ?1
+                UNION ALL
+                SELECT child.id, child.depth FROM categories child
+                JOIN descendants parent ON child.parent_id = parent.id
+            )
+            SELECT COALESCE(MAX(depth), ?2) - ?2 FROM descendants
+            "#,
+            params![id, current.1],
+            |row| row.get(0),
+        )?;
+        if target_depth + subtree_relative_depth > 5 {
+            return Err(AppError::new(
+                "CAT-003",
+                "移動すると分類が6階層以上になります。",
+                "より上の階層を移動先として選択してください。",
+            ));
+        }
+
+        let normalized_name = normalize(name);
+        let duplicate: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM categories WHERE id <> ?1 AND parent_id IS ?2 AND normalized_name = ?3)",
+            params![id, parent_id, normalized_name],
+            |row| row.get(0),
+        )?;
+        if duplicate {
+            return Err(AppError::new(
+                "CAT-004",
+                "移動先に同名の分類があります。",
+                "分類名または移動先を変更してください。",
+            ));
+        }
+
+        let parent_changed = current.0.as_deref() != parent_id;
+        let sort_order = if parent_changed {
+            transaction.query_row(
+                "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM categories WHERE parent_id IS ?1 AND id <> ?2",
+                params![parent_id, id],
+                |row| row.get::<_, i64>(0),
+            )?
+        } else {
+            transaction.query_row(
+                "SELECT sort_order FROM categories WHERE id = ?1",
+                [id],
+                |row| row.get::<_, i64>(0),
+            )?
+        };
+        let depth_delta = target_depth - current.1;
+        let now = Utc::now().to_rfc3339();
+        transaction.execute(
+            r#"
+            UPDATE categories
+               SET parent_id = ?2, name = ?3, normalized_name = ?4,
+                   depth = ?5, sort_order = ?6, updated_at = ?7
+             WHERE id = ?1
+            "#,
+            params![
+                id,
+                parent_id,
+                name,
+                normalized_name,
+                target_depth,
+                sort_order,
+                now
+            ],
+        )?;
+        if depth_delta != 0 {
+            transaction.execute(
+                r#"
+                WITH RECURSIVE descendants(id) AS (
+                    SELECT id FROM categories WHERE parent_id = ?1
+                    UNION ALL
+                    SELECT child.id FROM categories child
+                    JOIN descendants parent ON child.parent_id = parent.id
+                )
+                UPDATE categories SET depth = depth + ?2, updated_at = ?3
+                 WHERE id IN (SELECT id FROM descendants)
+                "#,
+                params![id, depth_delta, now],
+            )?;
+        }
+        transaction.commit()?;
+        self.list_categories()?
+            .into_iter()
+            .find(|category| category.id == id)
+            .ok_or_else(category_not_found)
+    }
+
+    pub fn delete_category(&mut self, id: &str) -> AppResult<()> {
+        let transaction = self.connection.transaction()?;
+        let exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM categories WHERE id = ?1)",
+            [id],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Err(category_not_found());
+        }
+        let child_count: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM categories WHERE parent_id = ?1",
+            [id],
+            |row| row.get(0),
+        )?;
+        let article_count: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM articles WHERE category_id = ?1",
+            [id],
+            |row| row.get(0),
+        )?;
+        if child_count > 0 || article_count > 0 {
+            return Err(AppError::new(
+                "CAT-005",
+                "配下分類またはFAQが残っているため、この分類は削除できません。",
+                "配下分類とFAQを別の分類へ移動するか、先に削除してください。",
+            ));
+        }
+        transaction.execute("DELETE FROM categories WHERE id = ?1", [id])?;
+        transaction.commit()?;
+        Ok(())
     }
 
     pub fn save_article(&mut self, article: ArticleRecord<'_>) -> AppResult<Article> {
@@ -620,6 +785,34 @@ fn article_not_found() -> AppError {
     )
 }
 
+fn validate_category_name(name: &str) -> AppResult<&str> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 100 {
+        return Err(AppError::new(
+            "CAT-001",
+            "分類名は1～100文字で入力してください。",
+            "分類名を確認して、もう一度保存してください。",
+        ));
+    }
+    Ok(name)
+}
+
+fn category_not_found() -> AppError {
+    AppError::new(
+        "CAT-002",
+        "指定した分類が見つかりません。",
+        "分類一覧を更新して、選び直してください。",
+    )
+}
+
+fn category_cycle_error() -> AppError {
+    AppError::new(
+        "CAT-006",
+        "分類を自分自身または配下分類の下へ移動できません。",
+        "別の分類を移動先として選択してください。",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -647,6 +840,62 @@ mod tests {
             .create_category("階層6", parent.as_deref())
             .unwrap_err();
         assert_eq!(error.code, "CAT-003");
+    }
+
+    #[test]
+    fn category_move_rejects_cycles_and_sixth_level() {
+        let (_directory, mut database) = temporary_database();
+        let root = database.create_category("移動元", None).unwrap();
+        let child = database
+            .create_category("移動元の子", Some(&root.id))
+            .unwrap();
+        let cycle_error = database
+            .update_category(&root.id, &root.name, Some(&child.id))
+            .unwrap_err();
+        assert_eq!(cycle_error.code, "CAT-006");
+
+        let target1 = database.create_category("対象1", None).unwrap();
+        let target2 = database
+            .create_category("対象2", Some(&target1.id))
+            .unwrap();
+        let target3 = database
+            .create_category("対象3", Some(&target2.id))
+            .unwrap();
+        let target4 = database
+            .create_category("対象4", Some(&target3.id))
+            .unwrap();
+        let depth_error = database
+            .update_category(&root.id, &root.name, Some(&target4.id))
+            .unwrap_err();
+        assert_eq!(depth_error.code, "CAT-003");
+    }
+
+    #[test]
+    fn category_can_be_renamed_moved_and_deleted_only_when_empty() {
+        let (_directory, mut database) = temporary_database();
+        let root_a = database.create_category("A", None).unwrap();
+        let root_b = database.create_category("B", None).unwrap();
+        let child = database
+            .create_category("変更前", Some(&root_a.id))
+            .unwrap();
+
+        let updated = database
+            .update_category(&child.id, "変更後", Some(&root_b.id))
+            .unwrap();
+        assert_eq!(updated.name, "変更後");
+        assert_eq!(updated.parent_id.as_deref(), Some(root_b.id.as_str()));
+        assert_eq!(updated.depth, 2);
+
+        let nonempty_error = database.delete_category(&root_b.id).unwrap_err();
+        assert_eq!(nonempty_error.code, "CAT-005");
+        database.delete_category(&child.id).unwrap();
+        assert!(
+            database
+                .list_categories()
+                .unwrap()
+                .iter()
+                .all(|category| category.id != child.id)
+        );
     }
 
     #[test]

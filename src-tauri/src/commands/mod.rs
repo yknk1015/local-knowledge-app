@@ -8,7 +8,7 @@ use crate::{
     models::{
         Article, ArticleListItem, BackupOverview, BackupPreview, BackupResult, Category,
         CreateCategoryInput, CreateFullBackupInput, ManagementArticlePage, ManagementArticlesInput,
-        RestoreResult, SaveArticleInput, SearchArticlesInput, SystemInfo,
+        RestoreResult, SaveArticleInput, SearchArticlesInput, SystemInfo, UpdateCategoryInput,
     },
     repositories::database::ArticleRecord,
     services::{backup, rich_content},
@@ -42,6 +42,19 @@ pub fn create_category(
     state: State<'_, AppState>,
 ) -> AppResult<Category> {
     lock_database(&state)?.create_category(&input.name, input.parent_id.as_deref())
+}
+
+#[tauri::command]
+pub fn update_category(
+    input: UpdateCategoryInput,
+    state: State<'_, AppState>,
+) -> AppResult<Category> {
+    lock_database(&state)?.update_category(&input.id, &input.name, input.parent_id.as_deref())
+}
+
+#[tauri::command]
+pub fn delete_category(id: String, state: State<'_, AppState>) -> AppResult<()> {
+    lock_database(&state)?.delete_category(&id)
 }
 
 #[tauri::command]

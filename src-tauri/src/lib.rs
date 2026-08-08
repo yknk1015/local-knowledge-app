@@ -35,6 +35,8 @@ pub fn run() {
             commands::get_system_info,
             commands::list_categories,
             commands::create_category,
+            commands::update_category,
+            commands::delete_category,
             commands::get_article,
             commands::search_articles,
             commands::save_article,

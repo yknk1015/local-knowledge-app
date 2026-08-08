@@ -19,6 +19,14 @@ pub struct CreateCategoryInput {
     pub parent_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateCategoryInput {
+    pub id: String,
+    pub name: String,
+    pub parent_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArticleListItem {

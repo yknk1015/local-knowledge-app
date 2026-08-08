@@ -59,6 +59,9 @@ export const knowledgeApi = {
   listCategories: () => call<Category[]>("list_categories"),
   createCategory: (name: string, parentId?: string) =>
     call<Category>("create_category", { input: { name, parentId: parentId || null } }),
+  updateCategory: (id: string, name: string, parentId?: string) =>
+    call<Category>("update_category", { input: { id, name, parentId: parentId || null } }),
+  deleteCategory: (id: string) => call<void>("delete_category", { id }),
   searchArticles: (input: SearchArticlesInput) =>
     call<ArticleListItem[]>("search_articles", { input }),
   getArticle: (id: string) => call<Article>("get_article", { id }),
