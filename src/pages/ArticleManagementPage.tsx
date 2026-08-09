@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { knowledgeApi, toAppError } from "../api/knowledgeApi";
 import { EmptyState, ErrorState, LoadingState } from "../components/Feedback";
 import { StatusBadge } from "../components/StatusBadge";
+import { ArticleDisplayBadges } from "../components/ArticleDisplayBadges";
 import type {
   AppError,
   ArticleStatus,
@@ -187,7 +188,18 @@ export function ArticleManagementPage() {
                     {article.summary && <small>{article.summary}</small>}
                   </td>
                   <td>{article.categoryName}</td>
-                  <td><StatusBadge status={article.status} /></td>
+                  <td>
+                    <div className="management-badges">
+                      <StatusBadge status={article.status} />
+                      <ArticleDisplayBadges
+                        newBadgeUntil={article.newBadgeUntil}
+                        updatedBadgeUntil={article.updatedBadgeUntil}
+                        isHidden={article.isHidden}
+                        showHidden
+                        showExpired
+                      />
+                    </div>
+                  </td>
                   <td>{new Date(article.updatedAt).toLocaleDateString("ja-JP")}</td>
                   <td className="management-row-actions">
                     {deleted ? (

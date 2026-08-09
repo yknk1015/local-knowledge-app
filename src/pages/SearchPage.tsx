@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { knowledgeApi, toAppError } from "../api/knowledgeApi";
 import { EmptyState, ErrorState, LoadingState } from "../components/Feedback";
 import { StatusBadge } from "../components/StatusBadge";
+import { ArticleDisplayBadges } from "../components/ArticleDisplayBadges";
 import type { AppError, ArticleListItem, Category } from "../types/domain";
 
 export function SearchPage() {
@@ -121,6 +122,10 @@ export function SearchPage() {
               <div className="card-meta">
                 <span className="category-pill">{article.categoryName}</span>
                 <StatusBadge status={article.status} />
+                <ArticleDisplayBadges
+                  newBadgeUntil={article.newBadgeUntil}
+                  updatedBadgeUntil={article.updatedBadgeUntil}
+                />
               </div>
               <h2>{article.title}</h2>
               <p>{article.summary || "概要はまだ入力されていません。"}</p>

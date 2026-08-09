@@ -34,6 +34,9 @@ describe("SearchPage", () => {
         summary: "画面表示を確認する手順です。",
         status: "published",
         importance: 2,
+        newBadgeUntil: "9999-12-31",
+        updatedBadgeUntil: null,
+        isHidden: false,
         updatedAt: "2026-08-08T00:00:00Z",
       },
     ]);
@@ -47,6 +50,7 @@ describe("SearchPage", () => {
     expect(await screen.findByRole("heading", { name: "画面が真っ暗になったとき" })).toBeInTheDocument();
     expect(screen.getByText("1件のFAQ")).toBeInTheDocument();
     expect(screen.getByText("公開")).toBeInTheDocument();
+    expect(screen.getByText("新着")).toBeInTheDocument();
   });
 
   it("runs a keyword search only after the user submits it", async () => {

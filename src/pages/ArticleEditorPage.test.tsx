@@ -53,4 +53,30 @@ describe("ArticleEditorPage", () => {
       block: "start",
     }));
   });
+
+  it("explains when a selected display flag has no end date", async () => {
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: vi.fn(),
+    });
+    vi.spyOn(knowledgeApi, "listCategories").mockResolvedValue([
+      { id: "category-1", parentId: null, name: "操作全般", depth: 1, sortOrder: 0, articleCount: 0 },
+    ]);
+    const save = vi.spyOn(knowledgeApi, "saveArticle");
+
+    render(
+      <MemoryRouter initialEntries={["/articles/new"]}>
+        <Routes>
+          <Route path="/articles/new" element={<ArticleEditorPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    fireEvent.change(await screen.findByLabelText(/タイトル/), { target: { value: "新しいFAQ" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: /「新着」を表示する/ }));
+    fireEvent.click(screen.getByRole("button", { name: "下書きを保存" }));
+
+    expect(await screen.findByText("新着フラグの表示終了日を選択してください。")).toBeVisible();
+    expect(save).not.toHaveBeenCalled();
+  });
 });

@@ -37,6 +37,9 @@ pub struct ArticleListItem {
     pub summary: String,
     pub status: String,
     pub importance: i64,
+    pub new_badge_until: Option<String>,
+    pub updated_badge_until: Option<String>,
+    pub is_hidden: bool,
     pub updated_at: String,
 }
 
@@ -52,6 +55,9 @@ pub struct Article {
     pub body_plain_text: String,
     pub status: String,
     pub importance: i64,
+    pub new_badge_until: Option<String>,
+    pub updated_badge_until: Option<String>,
+    pub is_hidden: bool,
     pub created_at: String,
     pub updated_at: String,
     pub deleted_at: Option<String>,
@@ -100,6 +106,9 @@ pub struct SaveArticleInput {
     pub body_doc: Value,
     pub status: String,
     pub importance: i64,
+    pub new_badge_until: Option<String>,
+    pub updated_badge_until: Option<String>,
+    pub is_hidden: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -130,6 +139,9 @@ pub struct ManagementArticleListItem {
     pub summary: String,
     pub status: String,
     pub importance: i64,
+    pub new_badge_until: Option<String>,
+    pub updated_badge_until: Option<String>,
+    pub is_hidden: bool,
     pub updated_at: String,
     pub deleted_at: Option<String>,
 }

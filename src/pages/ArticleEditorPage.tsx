@@ -23,6 +23,11 @@ export function ArticleEditorPage() {
   const [imageSources, setImageSources] = useState<ManagedImageSource[]>([]);
   const [status, setStatus] = useState<ArticleStatus>("draft");
   const [importance, setImportance] = useState(1);
+  const [newBadgeEnabled, setNewBadgeEnabled] = useState(false);
+  const [newBadgeUntil, setNewBadgeUntil] = useState("");
+  const [updatedBadgeEnabled, setUpdatedBadgeEnabled] = useState(false);
+  const [updatedBadgeUntil, setUpdatedBadgeUntil] = useState("");
+  const [isHidden, setIsHidden] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<AppError | null>(null);
@@ -71,6 +76,11 @@ export function ArticleEditorPage() {
         );
         setStatus(article.status);
         setImportance(article.importance);
+        setNewBadgeEnabled(Boolean(article.newBadgeUntil));
+        setNewBadgeUntil(article.newBadgeUntil ?? "");
+        setUpdatedBadgeEnabled(Boolean(article.updatedBadgeUntil));
+        setUpdatedBadgeUntil(article.updatedBadgeUntil ?? "");
+        setIsHidden(article.isHidden);
       } catch (caught) {
         if (active) setError(toAppError(caught));
       } finally {
@@ -145,6 +155,8 @@ export function ArticleEditorPage() {
     if (status === "published" && JSON.stringify(bodyDoc) === JSON.stringify(EMPTY_DOCUMENT)) {
       problems.push("公開する場合は回答を入力してください。");
     }
+    if (newBadgeEnabled && !newBadgeUntil) problems.push("新着フラグの表示終了日を選択してください。");
+    if (updatedBadgeEnabled && !updatedBadgeUntil) problems.push("更新フラグの表示終了日を選択してください。");
     setValidation(problems);
     if (problems.length > 0) return;
 
@@ -159,6 +171,9 @@ export function ArticleEditorPage() {
         bodyDoc,
         status,
         importance,
+        newBadgeUntil: newBadgeEnabled ? newBadgeUntil : null,
+        updatedBadgeUntil: updatedBadgeEnabled ? updatedBadgeUntil : null,
+        isHidden,
       });
       navigate(`/articles/${saved.id}`);
     } catch (caught) {
@@ -249,7 +264,7 @@ export function ArticleEditorPage() {
           <div className="section-number">2</div>
           <div className="section-content">
             <h2>回答</h2>
-            <p className="section-help">見出し、箇条書き、表、画像、参考URLを使って分かりやすく整理できます。PNG・JPEG・WebP・GIFを1件10MBまで追加できます。</p>
+            <p className="section-help">見出し、箇条書き、表、画像、参考URLを使って分かりやすく整理できます。段落の間隔は読みやすい幅に抑えています。</p>
             <RichTextEditor
               value={bodyDoc}
               onChange={setBodyDoc}
@@ -264,6 +279,62 @@ export function ArticleEditorPage() {
             <p className="url-help">
               URLを入力・貼り付けると、クリックされない文字として安全に保存されます。クリック可能にする場合は文字を選択して「参考URL」、文字へ戻す場合は「リンク解除」を選んでください。
             </p>
+          </div>
+        </section>
+
+        <section className="panel form-section">
+          <div className="section-number">3</div>
+          <div className="section-content">
+            <h2>表示設定</h2>
+            <p className="section-help">新着・更新フラグは、選択した表示終了日当日まで表示されます。</p>
+            <div className="display-settings-grid">
+              <div className="display-setting-card">
+                <label className="check-option">
+                  <input
+                    type="checkbox"
+                    checked={newBadgeEnabled}
+                    onChange={(event) => setNewBadgeEnabled(event.target.checked)}
+                  />
+                  <span><strong>「新着」を表示する</strong><small>検索結果とFAQ詳細に新着フラグを表示します。</small></span>
+                </label>
+                <label className="date-option">
+                  <span>表示終了日</span>
+                  <input
+                    type="date"
+                    value={newBadgeUntil}
+                    disabled={!newBadgeEnabled}
+                    aria-required={newBadgeEnabled}
+                    onChange={(event) => setNewBadgeUntil(event.target.value)}
+                  />
+                </label>
+              </div>
+              <div className="display-setting-card">
+                <label className="check-option">
+                  <input
+                    type="checkbox"
+                    checked={updatedBadgeEnabled}
+                    onChange={(event) => setUpdatedBadgeEnabled(event.target.checked)}
+                  />
+                  <span><strong>「更新」を表示する</strong><small>検索結果とFAQ詳細に更新フラグを表示します。</small></span>
+                </label>
+                <label className="date-option">
+                  <span>表示終了日</span>
+                  <input
+                    type="date"
+                    value={updatedBadgeUntil}
+                    disabled={!updatedBadgeEnabled}
+                    aria-required={updatedBadgeEnabled}
+                    onChange={(event) => setUpdatedBadgeUntil(event.target.value)}
+                  />
+                </label>
+              </div>
+              <div className="display-setting-card hidden-setting">
+                <label className="check-option">
+                  <input type="checkbox" checked={isHidden} onChange={(event) => setIsHidden(event.target.checked)} />
+                  <span><strong>このFAQを非表示にする</strong><small>公開状態でも通常検索には出さず、FAQ管理画面からのみ確認・編集できます。</small></span>
+                </label>
+              </div>
+            </div>
           </div>
         </section>
 

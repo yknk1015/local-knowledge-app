@@ -4,6 +4,7 @@ import { knowledgeApi, toAppError } from "../api/knowledgeApi";
 import { ErrorState, LoadingState } from "../components/Feedback";
 import { RichTextViewer } from "../components/RichTextEditor";
 import { StatusBadge } from "../components/StatusBadge";
+import { ArticleDisplayBadges } from "../components/ArticleDisplayBadges";
 import type { AppError, Article } from "../types/domain";
 
 export function ArticleDetailPage() {
@@ -113,6 +114,12 @@ export function ArticleDetailPage() {
         <div className="card-meta">
           <span className="category-pill">{article.categoryName}</span>
           <StatusBadge status={article.status} />
+          <ArticleDisplayBadges
+            newBadgeUntil={article.newBadgeUntil}
+            updatedBadgeUntil={article.updatedBadgeUntil}
+            isHidden={article.isHidden}
+            showHidden
+          />
           <span className="importance">重要度 {article.importance}</span>
         </div>
         <h1>{article.title}</h1>

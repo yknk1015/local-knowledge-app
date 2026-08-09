@@ -17,6 +17,9 @@ export interface ArticleListItem {
   summary: string;
   status: ArticleStatus;
   importance: number;
+  newBadgeUntil: string | null;
+  updatedBadgeUntil: string | null;
+  isHidden: boolean;
   updatedAt: string;
 }
 
@@ -57,6 +60,9 @@ export interface SaveArticleInput {
   bodyDoc: Record<string, unknown>;
   status: ArticleStatus;
   importance: number;
+  newBadgeUntil: string | null;
+  updatedBadgeUntil: string | null;
+  isHidden: boolean;
 }
 
 export interface SearchArticlesInput {

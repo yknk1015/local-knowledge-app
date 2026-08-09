@@ -26,6 +26,9 @@ const article = {
   summary: "画面設定を確認します",
   status: "published" as const,
   importance: 1,
+  newBadgeUntil: null,
+  updatedBadgeUntil: null,
+  isHidden: false,
   updatedAt: "2026-08-08T12:00:00Z",
   deletedAt: null,
 };

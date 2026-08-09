@@ -16,6 +16,9 @@ use crate::{
 };
 
 const INITIAL_MIGRATION: &str = include_str!("../../migrations/0001_initial.sql");
+const ARTICLE_DISPLAY_FLAGS_MIGRATION: &str =
+    include_str!("../../migrations/0002_article_display_flags.sql");
+const CURRENT_SCHEMA_VERSION: i64 = 2;
 
 pub struct Database {
     connection: Connection,
@@ -31,6 +34,9 @@ pub struct ArticleRecord<'a> {
     pub body_plain_text: &'a str,
     pub status: &'a str,
     pub importance: i64,
+    pub new_badge_until: Option<&'a str>,
+    pub updated_badge_until: Option<&'a str>,
+    pub is_hidden: bool,
     pub attachments: &'a [AttachmentRecord],
 }
 
@@ -61,7 +67,9 @@ impl Database {
         connection
             .execute_batch(INITIAL_MIGRATION)
             .map_err(|_| AppError::database("データベースの初期設定に失敗しました。"))?;
-        Ok(Self { connection })
+        let database = Self { connection };
+        database.apply_migrations()?;
+        Ok(database)
     }
 
     pub fn backup_to(&self, destination: &Path) -> AppResult<()> {
@@ -93,6 +101,7 @@ impl Database {
         self.connection
             .execute_batch("PRAGMA foreign_keys = ON;\nPRAGMA journal_mode = WAL;\nPRAGMA synchronous = NORMAL;")
             .map_err(AppError::from)?;
+        self.apply_migrations()?;
         self.quick_check()
     }
 
@@ -146,6 +155,21 @@ impl Database {
                 |row| row.get(0),
             )
             .map_err(AppError::from)
+    }
+
+    fn apply_migrations(&self) -> AppResult<()> {
+        let version = self.schema_version()?;
+        if version > CURRENT_SCHEMA_VERSION {
+            return Err(AppError::database(
+                "このFAQデータは、現在のアプリより新しい形式です。アプリを更新してください。",
+            ));
+        }
+        if version < 2 {
+            self.connection
+                .execute_batch(ARTICLE_DISPLAY_FLAGS_MIGRATION)
+                .map_err(|_| AppError::database("FAQデータの更新に失敗しました。"))?;
+        }
+        Ok(())
     }
 
     pub fn backup_counts(&self) -> AppResult<BackupCounts> {
@@ -488,7 +512,8 @@ impl Database {
                 UPDATE articles
                    SET category_id = ?2, title = ?3, normalized_title = ?4, summary = ?5,
                        body_doc_json = ?6, body_plain_text = ?7, status = ?8,
-                       importance = ?9, updated_at = ?10
+                       importance = ?9, new_badge_until = ?10, updated_badge_until = ?11,
+                       is_hidden = ?12, updated_at = ?13
                  WHERE id = ?1 AND deleted_at IS NULL
                 "#,
                 params![
@@ -501,6 +526,9 @@ impl Database {
                     article.body_plain_text,
                     article.status,
                     article.importance,
+                    article.new_badge_until,
+                    article.updated_badge_until,
+                    article.is_hidden,
                     now
                 ],
             )?;
@@ -513,7 +541,8 @@ impl Database {
                 INSERT INTO articles(
                     id, category_id, title, normalized_title, summary, body_doc_json,
                     body_format_version, body_plain_text, status, importance, created_at, updated_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?8, ?9, ?10, ?10)
+                    , new_badge_until, updated_badge_until, is_hidden
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?8, ?9, ?10, ?10, ?11, ?12, ?13)
                 "#,
                 params![
                     id,
@@ -525,7 +554,10 @@ impl Database {
                     article.body_plain_text,
                     article.status,
                     article.importance,
-                    now
+                    now,
+                    article.new_badge_until,
+                    article.updated_badge_until,
+                    article.is_hidden
                 ],
             )?;
         }
@@ -589,7 +621,7 @@ impl Database {
                 r#"
                 SELECT a.id, a.category_id, c.name, a.title, a.summary, a.body_doc_json,
                        a.body_plain_text, a.status, a.importance, a.created_at, a.updated_at,
-                       a.deleted_at
+                       a.deleted_at, a.new_badge_until, a.updated_badge_until, a.is_hidden
                   FROM articles a
                   JOIN categories c ON c.id = a.category_id
                  WHERE a.id = ?1
@@ -640,11 +672,13 @@ impl Database {
                 JOIN selected_categories parent ON c.parent_id = parent.id
             )
             SELECT a.id, a.category_id, c.name, a.title, a.summary,
-                   a.status, a.importance, a.updated_at
+                   a.status, a.importance, a.new_badge_until, a.updated_badge_until,
+                   a.is_hidden, a.updated_at
               FROM articles a
               JOIN categories c ON c.id = a.category_id
               JOIN article_search_documents search_doc ON search_doc.article_id = a.id
              WHERE a.deleted_at IS NULL
+               AND a.is_hidden = 0
                AND (?3 = 1 OR a.status = 'published')
                AND (?2 IS NULL OR a.category_id IN (SELECT id FROM selected_categories))
                AND (?1 = '' OR search_doc.title LIKE ?4 ESCAPE '\'
@@ -670,7 +704,10 @@ impl Database {
                     summary: row.get(4)?,
                     status: row.get(5)?,
                     importance: row.get(6)?,
-                    updated_at: row.get(7)?,
+                    new_badge_until: row.get(7)?,
+                    updated_badge_until: row.get(8)?,
+                    is_hidden: row.get(9)?,
+                    updated_at: row.get(10)?,
                 })
             },
         )?;
@@ -697,7 +734,8 @@ impl Database {
                 JOIN selected_categories parent ON c.parent_id = parent.id
             ), filtered AS (
                 SELECT a.id, a.category_id, c.name AS category_name, a.title, a.summary,
-                       a.status, a.importance, a.updated_at, a.deleted_at
+                       a.status, a.importance, a.new_badge_until, a.updated_badge_until,
+                       a.is_hidden, a.updated_at, a.deleted_at
                   FROM articles a
                   JOIN categories c ON c.id = a.category_id
                   JOIN article_search_documents search_doc ON search_doc.article_id = a.id
@@ -709,7 +747,8 @@ impl Database {
                         OR search_doc.body LIKE ?5 ESCAPE '\')
             )
             SELECT id, category_id, category_name, title, summary, status, importance,
-                   updated_at, deleted_at, COUNT(*) OVER()
+                   new_badge_until, updated_badge_until, is_hidden, updated_at, deleted_at,
+                   COUNT(*) OVER()
               FROM filtered
              ORDER BY updated_at DESC
              LIMIT ?6 OFFSET ?7
@@ -735,10 +774,13 @@ impl Database {
                         summary: row.get(4)?,
                         status: row.get(5)?,
                         importance: row.get(6)?,
-                        updated_at: row.get(7)?,
-                        deleted_at: row.get(8)?,
+                        new_badge_until: row.get(7)?,
+                        updated_badge_until: row.get(8)?,
+                        is_hidden: row.get(9)?,
+                        updated_at: row.get(10)?,
+                        deleted_at: row.get(11)?,
                     },
-                    row.get::<_, i64>(9)?,
+                    row.get::<_, i64>(12)?,
                 ))
             },
         )?;
@@ -822,6 +864,9 @@ fn article_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Article> {
         created_at: row.get(9)?,
         updated_at: row.get(10)?,
         deleted_at: row.get(11)?,
+        new_badge_until: row.get(12)?,
+        updated_badge_until: row.get(13)?,
+        is_hidden: row.get(14)?,
         attachments: Vec::new(),
     })
 }
@@ -888,6 +933,59 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let database = Database::open(&directory.path().join("knowledge.db")).unwrap();
         (directory, database)
+    }
+
+    #[test]
+    fn opens_and_upgrades_a_version_one_database() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("knowledge.db");
+        let connection = Connection::open(&path).unwrap();
+        connection.execute_batch(INITIAL_MIGRATION).unwrap();
+        drop(connection);
+
+        let database = Database::open(&path).unwrap();
+        assert_eq!(database.schema_version().unwrap(), 2);
+        let columns: i64 = database
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('articles') WHERE name IN ('new_badge_until', 'updated_badge_until', 'is_hidden')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(columns, 3);
+    }
+
+    #[test]
+    fn restore_upgrades_a_version_one_snapshot_and_keeps_articles() {
+        let directory = tempfile::tempdir().unwrap();
+        let source_path = directory.path().join("version-one.db");
+        let source = Connection::open(&source_path).unwrap();
+        source.execute_batch(INITIAL_MIGRATION).unwrap();
+        let now = "2026-08-10T00:00:00Z";
+        source
+            .execute(
+                "INSERT INTO categories(id, name, normalized_name, depth, sort_order, created_at, updated_at) VALUES ('cat', '分類', '分類', 1, 0, ?1, ?1)",
+                [now],
+            )
+            .unwrap();
+        source
+            .execute(
+                "INSERT INTO articles(id, category_id, title, normalized_title, summary, body_doc_json, body_plain_text, status, importance, created_at, updated_at) VALUES ('article', 'cat', '旧FAQ', '旧faq', '概要', '{\"type\":\"doc\"}', '回答', 'published', 1, ?1, ?1)",
+                [now],
+            )
+            .unwrap();
+        drop(source);
+
+        let target_path = directory.path().join("current.db");
+        let mut target = Database::open(&target_path).unwrap();
+        target.restore_from(&source_path).unwrap();
+
+        assert_eq!(target.schema_version().unwrap(), 2);
+        let article = target.get_article("article").unwrap();
+        assert_eq!(article.title, "旧FAQ");
+        assert!(!article.is_hidden);
+        assert!(article.new_badge_until.is_none());
     }
 
     #[test]
@@ -982,16 +1080,19 @@ mod tests {
                 body_plain_text: "再起動します",
                 status: "draft",
                 importance: 1,
+                new_badge_until: Some("2026-08-31"),
+                updated_badge_until: Some("2026-09-15"),
+                is_hidden: false,
                 attachments: &[],
             })
             .unwrap();
         drop(database);
 
         let database = Database::open(&directory.path().join("knowledge.db")).unwrap();
-        assert_eq!(
-            database.get_article(&draft.id).unwrap().title,
-            "画面が真っ暗"
-        );
+        let reopened = database.get_article(&draft.id).unwrap();
+        assert_eq!(reopened.title, "画面が真っ暗");
+        assert_eq!(reopened.new_badge_until.as_deref(), Some("2026-08-31"));
+        assert_eq!(reopened.updated_badge_until.as_deref(), Some("2026-09-15"));
         let public_results = database
             .search_articles(&SearchArticlesInput {
                 query: "画面".into(),
@@ -1016,6 +1117,54 @@ mod tests {
     }
 
     #[test]
+    fn hidden_articles_are_only_available_in_management() {
+        let (_directory, mut database) = temporary_database();
+        let category = database.create_category("社内", None).unwrap();
+        let body = json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"管理者向け"}]}]});
+        let article_id = Uuid::now_v7().to_string();
+        let hidden = database
+            .save_article(ArticleRecord {
+                id: &article_id,
+                is_new: true,
+                category_id: &category.id,
+                title: "非表示のFAQ",
+                summary: "管理一覧だけに表示します",
+                body_doc: &body,
+                body_plain_text: "管理者向け",
+                status: "published",
+                importance: 1,
+                new_badge_until: Some("2026-08-31"),
+                updated_badge_until: None,
+                is_hidden: true,
+                attachments: &[],
+            })
+            .unwrap();
+
+        assert!(hidden.is_hidden);
+        assert!(
+            database
+                .search_articles(&SearchArticlesInput {
+                    query: "非表示".into(),
+                    category_id: None,
+                    include_drafts: true,
+                })
+                .unwrap()
+                .is_empty()
+        );
+        let management = database
+            .list_articles_for_management(&ManagementArticlesInput {
+                query: "非表示".into(),
+                category_id: None,
+                status: None,
+                deleted: false,
+                page: 1,
+            })
+            .unwrap();
+        assert_eq!(management.total, 1);
+        assert!(management.items[0].is_hidden);
+    }
+
+    #[test]
     fn logically_deletes_and_restores_an_article() {
         let (_directory, mut database) = temporary_database();
         let category = database.create_category("PC", None).unwrap();
@@ -1032,6 +1181,9 @@ mod tests {
                 body_plain_text: "確認します",
                 status: "published",
                 importance: 1,
+                new_badge_until: None,
+                updated_badge_until: None,
+                is_hidden: false,
                 attachments: &[],
             })
             .unwrap();

@@ -1,5 +1,6 @@
 use std::{collections::HashMap, path::PathBuf};
 
+use chrono::NaiveDate;
 use tauri::State;
 use tauri_plugin_opener::OpenerExt;
 use url::Url;
@@ -118,6 +119,9 @@ pub fn save_article(input: SaveArticleInput, state: State<'_, AppState>) -> AppR
         body_plain_text: &rich_content.plain_text,
         status: &input.status,
         importance: input.importance,
+        new_badge_until: input.new_badge_until.as_deref(),
+        updated_badge_until: input.updated_badge_until.as_deref(),
+        is_hidden: input.is_hidden,
         attachments: &prepared.records,
     });
     let mut article = match saved {
@@ -211,6 +215,9 @@ pub fn duplicate_article(id: String, state: State<'_, AppState>) -> AppResult<Ar
         body_plain_text: &copied_content.plain_text,
         status: "draft",
         importance: source.importance,
+        new_badge_until: None,
+        updated_badge_until: None,
+        is_hidden: source.is_hidden,
         attachments: &prepared.records,
     });
     let mut article = match saved {
@@ -411,6 +418,22 @@ fn validate_article_fields(input: &SaveArticleInput) -> AppResult<()> {
             "重要度を選び直してください。",
         ));
     }
+    validate_badge_date(input.new_badge_until.as_deref(), "新着")?;
+    validate_badge_date(input.updated_badge_until.as_deref(), "更新")?;
+    Ok(())
+}
+
+fn validate_badge_date(value: Option<&str>, label: &str) -> AppResult<()> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    if NaiveDate::parse_from_str(value, "%Y-%m-%d").is_err() {
+        return Err(AppError::new(
+            "ART-001",
+            format!("{label}フラグの表示終了日が正しくありません。"),
+            "カレンダーから表示終了日を選び直してください。",
+        ));
+    }
     Ok(())
 }
 
@@ -429,8 +452,22 @@ mod tests {
             body_doc: json!({"type": "doc"}),
             status: "published".into(),
             importance: 1,
+            new_badge_until: None,
+            updated_badge_until: None,
+            is_hidden: false,
         };
         assert_eq!(validate_article_fields(&input).unwrap_err().code, "ART-001");
+    }
+
+    #[test]
+    fn badge_dates_use_iso_calendar_dates() {
+        assert!(validate_badge_date(Some("2026-08-10"), "新着").is_ok());
+        assert_eq!(
+            validate_badge_date(Some("2026-02-30"), "更新")
+                .unwrap_err()
+                .code,
+            "ART-001"
+        );
     }
 
     #[test]

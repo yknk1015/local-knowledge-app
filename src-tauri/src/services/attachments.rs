@@ -608,6 +608,9 @@ mod tests {
                 body_plain_text: &validated.plain_text,
                 status: "published",
                 importance: 1,
+                new_badge_until: None,
+                updated_badge_until: None,
+                is_hidden: false,
                 attachments: &prepared.records,
             })
             .unwrap();
@@ -637,6 +640,9 @@ mod tests {
                 body_plain_text: "",
                 status: "draft",
                 importance: 1,
+                new_badge_until: None,
+                updated_badge_until: None,
+                is_hidden: false,
                 attachments: &prepared_removal.records,
             })
             .unwrap();

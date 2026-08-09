@@ -21,7 +21,7 @@ use crate::{
 
 const BACKUP_FORMAT_VERSION: u32 = 1;
 const RICH_TEXT_FORMAT_VERSION: u32 = 1;
-const CURRENT_SCHEMA_VERSION: i64 = 1;
+const CURRENT_SCHEMA_VERSION: i64 = 2;
 const MAX_ARCHIVE_FILES: usize = 10_000;
 const MAX_UNCOMPRESSED_BYTES: u64 = 10 * 1024 * 1024 * 1024;
 
@@ -879,6 +879,9 @@ mod tests {
                 body_plain_text: "再起動します",
                 status: "published",
                 importance: 1,
+                new_badge_until: None,
+                updated_badge_until: None,
+                is_hidden: false,
                 attachments: &[],
             })
             .unwrap();
