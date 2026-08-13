@@ -27,6 +27,8 @@ pub fn run() {
             let data_root = DataRootService::initialize(app_data_dir, &forbidden_roots)?;
             services::attachments::cleanup_stale_stages(&data_root);
             let database = Database::open(&data_root.database_path())?;
+            let categories = database.list_categories()?;
+            services::codex_proposals::write_category_catalog(&data_root, &categories)?;
             app.manage(AppState {
                 data_root,
                 database: Mutex::new(database),
@@ -39,6 +41,11 @@ pub fn run() {
             commands::create_category,
             commands::update_category,
             commands::delete_category,
+            commands::list_codex_proposals,
+            commands::accept_codex_proposal,
+            commands::reject_codex_proposal,
+            commands::reopen_rejected_codex_proposal,
+            commands::create_codex_delegation,
             commands::get_article,
             commands::search_articles,
             commands::save_article,

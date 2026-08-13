@@ -16,6 +16,9 @@ const MANAGED_DIRECTORIES: &[&str] = &[
     "safety-backups",
     "settings",
     "temp",
+    "codex-bridge",
+    "codex-bridge/delegations",
+    "codex-inbox",
 ];
 
 #[derive(Debug, Clone)]
@@ -108,6 +111,18 @@ impl DataRootService {
 
     pub fn safety_backups_path(&self) -> PathBuf {
         self.root.join("safety-backups")
+    }
+
+    pub fn codex_bridge_path(&self) -> PathBuf {
+        self.root.join("codex-bridge")
+    }
+
+    pub fn codex_delegations_path(&self) -> PathBuf {
+        self.codex_bridge_path().join("delegations")
+    }
+
+    pub fn codex_inbox_path(&self) -> PathBuf {
+        self.root.join("codex-inbox")
     }
 }
 

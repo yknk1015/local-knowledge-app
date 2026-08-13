@@ -7,6 +7,9 @@ import type {
   BackupPreview,
   BackupResult,
   Category,
+  CodexProposalInbox,
+  CodexDelegationResult,
+  AcceptCodexProposalResult,
   ManagementArticlePage,
   ManagementArticlesInput,
   SaveArticleInput,
@@ -58,11 +61,27 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 export const knowledgeApi = {
   getSystemInfo: () => call<SystemInfo>("get_system_info"),
   listCategories: () => call<Category[]>("list_categories"),
-  createCategory: (name: string, parentId?: string) =>
-    call<Category>("create_category", { input: { name, parentId: parentId || null } }),
-  updateCategory: (id: string, name: string, parentId?: string) =>
-    call<Category>("update_category", { input: { id, name, parentId: parentId || null } }),
+  createCategory: (name: string, description: string, parentId?: string) =>
+    call<Category>("create_category", { input: { name, description, parentId: parentId || null } }),
+  updateCategory: (id: string, name: string, description: string, parentId?: string) =>
+    call<Category>("update_category", { input: { id, name, description, parentId: parentId || null } }),
   deleteCategory: (id: string) => call<void>("delete_category", { id }),
+  listCodexProposals: () => call<CodexProposalInbox>("list_codex_proposals"),
+  acceptCodexProposal: (
+    requestId: string,
+    categoryId: string | null,
+    createProposedCategory: boolean,
+  ) => call<AcceptCodexProposalResult>("accept_codex_proposal", {
+    input: { requestId, categoryId, createProposedCategory },
+  }),
+  rejectCodexProposal: (requestId: string) =>
+    call<void>("reject_codex_proposal", { requestId }),
+  reopenRejectedCodexProposal: (requestId: string) =>
+    call<void>("reopen_rejected_codex_proposal", { requestId }),
+  createCodexDelegation: (kind: "revise" | "merge", articleIds: string[]) =>
+    call<CodexDelegationResult>("create_codex_delegation", {
+      input: { kind, articleIds },
+    }),
   searchArticles: (input: SearchArticlesInput) =>
     call<ArticleListItem[]>("search_articles", { input }),
   getArticle: (id: string) => call<Article>("get_article", { id }),

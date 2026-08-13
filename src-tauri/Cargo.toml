@@ -1,6 +1,6 @@
 [package]
 name = "web-knowledge-system"
-version = "0.1.0"
+version = "0.2.0"
 description = "ローカルで完結する一人用FAQ・ナレッジ管理アプリ"
 authors = ["KnowledgeApp contributors"]
 edition = "2024"

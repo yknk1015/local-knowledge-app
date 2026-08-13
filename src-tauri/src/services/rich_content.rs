@@ -110,12 +110,12 @@ fn validate_node(
 
     if node_type == "image" {
         let reference = validate_image(object.get("attrs"))?;
-        if !attachments.contains_key(&reference.id) {
+        if let std::collections::btree_map::Entry::Vacant(entry) = attachments.entry(reference.id) {
             if !reference.alt_text.trim().is_empty() {
                 plain_text.push_str(&reference.alt_text);
                 plain_text.push(' ');
             }
-            attachments.insert(reference.id, reference.alt_text);
+            entry.insert(reference.alt_text);
         }
     } else {
         validate_attributes(node_type, object.get("attrs"))?;

@@ -5,7 +5,7 @@ import { ErrorState, LoadingState } from "../components/Feedback";
 import { RichTextViewer } from "../components/RichTextEditor";
 import { StatusBadge } from "../components/StatusBadge";
 import { ArticleDisplayBadges } from "../components/ArticleDisplayBadges";
-import type { AppError, Article } from "../types/domain";
+import type { AppError, Article, CodexDelegationResult } from "../types/domain";
 
 export function ArticleDetailPage() {
   const { articleId = "" } = useParams();
@@ -14,6 +14,7 @@ export function ArticleDetailPage() {
   const [error, setError] = useState<AppError | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionBusy, setActionBusy] = useState(false);
+  const [delegation, setDelegation] = useState<CodexDelegationResult | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -71,6 +72,20 @@ export function ArticleDetailPage() {
     }
   };
 
+  const delegateRevision = async () => {
+    if (!window.confirm(`「${article.title}」の本文をCodexへ渡す委譲ファイルを作成しますか？\nCodexは提案だけを作成し、承認するまでFAQを変更しません。`)) return;
+    setActionBusy(true);
+    setError(null);
+    setDelegation(null);
+    try {
+      setDelegation(await knowledgeApi.createCodexDelegation("revise", [article.id]));
+    } catch (caught) {
+      setError(toAppError(caught));
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
   if (article.deletedAt) {
     return (
       <article className="page article-detail">
@@ -100,6 +115,9 @@ export function ArticleDetailPage() {
       <div className="detail-actions">
         <Link to="/search" className="text-link">← 一覧へ戻る</Link>
         <div className="detail-action-buttons">
+          <button type="button" className="button secondary" disabled={actionBusy} onClick={() => void delegateRevision()}>
+            Codexに推敲・修正を依頼
+          </button>
           <button type="button" className="button secondary" disabled={actionBusy} onClick={() => void duplicateArticle()}>
             {actionBusy ? "処理中…" : "複製して下書きを作る"}
           </button>
@@ -110,6 +128,14 @@ export function ArticleDetailPage() {
         </div>
       </div>
       {error && <ErrorState error={error} />}
+      {delegation && (
+        <section className="success-notice codex-delegation-notice" role="status">
+          <strong>Codexへの委譲準備ができました。</strong>
+          <p>Codexの新しいタスクへ、次の文章をそのまま送ってください。</p>
+          <code>{delegation.prompt}</code>
+          <small>委譲番号：{delegation.delegationId}</small>
+        </section>
+      )}
       <header className="detail-header">
         <div className="card-meta">
           <span className="category-pill">{article.categoryName}</span>

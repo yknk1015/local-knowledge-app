@@ -4,9 +4,70 @@ export interface Category {
   id: string;
   parentId: string | null;
   name: string;
+  description: string;
   depth: number;
   sortOrder: number;
   articleCount: number;
+}
+
+export interface CodexCategoryCandidate {
+  categoryId: string;
+  categoryPath: string;
+  reason: string;
+}
+
+export interface CodexNewCategoryProposal {
+  parentCategoryId: string | null;
+  parentCategoryPath: string | null;
+  name: string;
+  description: string;
+  reason: string;
+}
+
+export interface CodexFaqProposal {
+  formatVersion: number;
+  requestId: string;
+  seriesId: string | null;
+  createdAt: string;
+  proposalKind: "create" | "revise" | "merge";
+  sourceArticles: Array<{ articleId: string; sourceUpdatedAt: string }>;
+  faq: {
+    title: string;
+    summary: string;
+    bodyDoc: Record<string, unknown>;
+    importance: number;
+  };
+  existingCategoryCandidates: CodexCategoryCandidate[];
+  newCategoryProposal: CodexNewCategoryProposal | null;
+}
+
+export interface CodexProposalInbox {
+  proposals: CodexFaqProposal[];
+  history: CodexProposalHistoryItem[];
+  rejected: Array<{ fileName: string; message: string }>;
+  inboxPath: string;
+  categoryCatalogPath: string;
+}
+
+export interface CodexProposalHistoryItem {
+  historyId: number;
+  proposal: CodexFaqProposal;
+  status: "accepted" | "rejected";
+  receivedAt: string;
+  decidedAt: string | null;
+  acceptedArticleId: string | null;
+  canReopen: boolean;
+}
+
+export interface AcceptCodexProposalResult {
+  article: Article;
+  createdCategory: Category | null;
+}
+
+export interface CodexDelegationResult {
+  delegationId: string;
+  prompt: string;
+  filePath: string;
 }
 
 export interface ArticleListItem {

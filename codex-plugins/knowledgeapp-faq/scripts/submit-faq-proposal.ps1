@@ -1,0 +1,90 @@
+[CmdletBinding()]
+param(
+    [string]$TestDataRoot,
+    [Parameter(ValueFromPipeline = $true)]
+    [string]$ProposalJson
+)
+
+begin {
+    $ErrorActionPreference = 'Stop'
+}
+process {
+$json = if ($null -ne $ProposalJson) { $ProposalJson } else { [Console]::In.ReadToEnd() }
+if ([string]::IsNullOrWhiteSpace($json)) {
+    throw 'FAQ提案JSONを標準入力へ渡してください。'
+}
+
+try {
+    $proposal = $json | ConvertFrom-Json
+}
+catch {
+    throw 'FAQ提案JSONの形式が正しくありません。'
+}
+
+if ($proposal.formatVersion -ne 1 -and $proposal.formatVersion -ne 2) { throw 'formatVersionは1または2にしてください。' }
+$requestId = [Guid]::Empty
+if (-not [Guid]::TryParse([string]$proposal.requestId, [ref]$requestId)) { throw 'requestIdはUUIDにしてください。' }
+$proposal.requestId = $requestId.ToString()
+$proposalKind = if ($proposal.formatVersion -eq 1) { 'create' } else { [string]$proposal.proposalKind }
+if ($proposalKind -notin @('create', 'revise', 'merge')) { throw 'proposalKindはcreate、revise、mergeのいずれかにしてください。' }
+if ($proposal.formatVersion -eq 2) {
+    $seriesId = [Guid]::Empty
+    if (-not [Guid]::TryParse([string]$proposal.seriesId, [ref]$seriesId)) { throw 'seriesIdはUUIDにしてください。' }
+    $proposal.seriesId = $seriesId.ToString()
+}
+$sources = @($proposal.sourceArticles)
+if (($proposalKind -eq 'create' -and $sources.Count -ne 0) -or
+    ($proposalKind -eq 'revise' -and $sources.Count -ne 1) -or
+    ($proposalKind -eq 'merge' -and ($sources.Count -lt 2 -or $sources.Count -gt 10))) {
+    throw 'sourceArticlesの件数がproposalKindと一致しません。'
+}
+$createdAt = [DateTimeOffset]::MinValue
+if (-not [DateTimeOffset]::TryParse([string]$proposal.createdAt, [ref]$createdAt)) { throw 'createdAtはRFC 3339形式にしてください。' }
+if ($null -eq $proposal.faq) { throw 'faqがありません。' }
+$title = [string]$proposal.faq.title
+if ([string]::IsNullOrWhiteSpace($title) -or $title.Length -gt 200) { throw 'faq.titleは1～200文字にしてください。' }
+if (([string]$proposal.faq.summary).Length -gt 500) { throw 'faq.summaryは500文字以内にしてください。' }
+if ([int]$proposal.faq.importance -lt 1 -or [int]$proposal.faq.importance -gt 3) { throw 'faq.importanceは1～3にしてください。' }
+if ($null -eq $proposal.faq.bodyDoc -or $proposal.faq.bodyDoc.type -ne 'doc') { throw 'faq.bodyDocはTiptapのdoc形式にしてください。' }
+
+$candidates = @($proposal.existingCategoryCandidates)
+if ($candidates.Count -gt 3) { throw 'existingCategoryCandidatesは3件以内にしてください。' }
+if ($proposalKind -eq 'revise') {
+    if ($candidates.Count -ne 0 -or $null -ne $proposal.newCategoryProposal) { throw 'reviseでは分類候補を指定しないでください。' }
+}
+elseif ($candidates.Count -eq 0 -and $null -eq $proposal.newCategoryProposal) { throw '既存分類候補または新規分類案が必要です。' }
+
+if (-not $env:LOCALAPPDATA) { throw 'Windowsのローカル利用者データフォルダを取得できません。' }
+$dataRoot = Join-Path $env:LOCALAPPDATA 'jp.local.webknowledgesystem'
+if ($TestDataRoot) {
+    $resolvedTestRoot = [IO.Path]::GetFullPath($TestDataRoot)
+    $temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+    if ($env:KNOWLEDGEAPP_PLUGIN_TEST_MODE -ne '1' -or
+        -not [IO.Path]::IsPathRooted($TestDataRoot) -or
+        -not $resolvedTestRoot.StartsWith($temporaryRoot, [StringComparison]::OrdinalIgnoreCase) -or
+        -not [IO.Path]::GetFileName($resolvedTestRoot).StartsWith('knowledgeapp-plugin-test-', [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'TestDataRootはテストモードの絶対パスだけを指定できます。'
+    }
+    $dataRoot = $resolvedTestRoot
+}
+$inbox = Join-Path $dataRoot 'codex-inbox'
+if (-not (Test-Path -LiteralPath $inbox -PathType Container)) {
+    throw 'KnowledgeAppの提案箱がありません。KnowledgeAppを一度起動してください。'
+}
+
+$normalized = $proposal | ConvertTo-Json -Depth 100
+if ([Text.Encoding]::UTF8.GetByteCount($normalized) -gt 1MB) { throw 'FAQ提案は1MB以内にしてください。' }
+$target = Join-Path $inbox ($requestId.ToString() + '.knowledge-proposal.json')
+if (Test-Path -LiteralPath $target) { throw '同じ受付番号の提案がすでにあります。新しいrequestIdで再作成してください。' }
+$partial = $target + '.' + [Guid]::NewGuid().ToString() + '.partial'
+
+try {
+    [IO.File]::WriteAllText($partial, $normalized, [Text.UTF8Encoding]::new($false))
+    Move-Item -LiteralPath $partial -Destination $target -ErrorAction Stop
+}
+finally {
+    if (Test-Path -LiteralPath $partial) { Remove-Item -LiteralPath $partial -Force }
+}
+
+Write-Output ('KnowledgeAppの確認待ち提案へ送信しました。受付番号: ' + $requestId.ToString())
+}

@@ -23,7 +23,7 @@ describe("SearchPage", () => {
 
   it("shows saved articles without rendering their body", async () => {
     vi.spyOn(knowledgeApi, "listCategories").mockResolvedValue([
-      { id: "cat", parentId: null, name: "Windows", depth: 1, sortOrder: 0, articleCount: 1 },
+      { id: "cat", parentId: null, name: "Windows", description: "", depth: 1, sortOrder: 0, articleCount: 1 },
     ]);
     vi.spyOn(knowledgeApi, "searchArticles").mockResolvedValue([
       {
@@ -55,7 +55,7 @@ describe("SearchPage", () => {
 
   it("runs a keyword search only after the user submits it", async () => {
     vi.spyOn(knowledgeApi, "listCategories").mockResolvedValue([
-      { id: "cat", parentId: null, name: "Windows", depth: 1, sortOrder: 0, articleCount: 0 },
+      { id: "cat", parentId: null, name: "Windows", description: "", depth: 1, sortOrder: 0, articleCount: 0 },
     ]);
     const search = vi.spyOn(knowledgeApi, "searchArticles").mockResolvedValue([]);
 

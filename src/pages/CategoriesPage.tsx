@@ -15,6 +15,7 @@ function isDescendant(category: Category, ancestorId: string, byId: Map<string, 
 export function CategoriesPage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
   const [parentId, setParentId] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -55,6 +56,7 @@ export function CategoriesPage() {
   const resetForm = () => {
     setEditingId(null);
     setName("");
+    setDescription("");
     setParentId("");
   };
 
@@ -63,6 +65,7 @@ export function CategoriesPage() {
     setNotice("");
     setEditingId(category.id);
     setName(category.name);
+    setDescription(category.description);
     setParentId(category.parentId ?? "");
   };
 
@@ -74,10 +77,10 @@ export function CategoriesPage() {
     setNotice("");
     try {
       if (editingId) {
-        const updated = await knowledgeApi.updateCategory(editingId, name.trim(), parentId || undefined);
+        const updated = await knowledgeApi.updateCategory(editingId, name.trim(), description.trim(), parentId || undefined);
         setNotice(`「${updated.name}」を更新しました。`);
       } else {
-        const created = await knowledgeApi.createCategory(name.trim(), parentId || undefined);
+        const created = await knowledgeApi.createCategory(name.trim(), description.trim(), parentId || undefined);
         setNotice(`「${created.name}」を作成しました。`);
       }
       resetForm();
@@ -132,7 +135,10 @@ export function CategoriesPage() {
               {categories.map((category) => (
                 <li key={category.id} className={editingId === category.id ? "selected" : ""} style={{ paddingLeft: `${(category.depth - 1) * 24 + 14}px` }}>
                   <span className="tree-line" aria-hidden="true">{category.depth > 1 ? "└" : "◆"}</span>
-                  <strong>{category.name}</strong>
+                  <div className="category-copy">
+                    <strong>{category.name}</strong>
+                    {category.description && <small className="category-description">{category.description}</small>}
+                  </div>
                   <span>{category.articleCount}件</span>
                   <div className="category-row-actions">
                     <button type="button" onClick={() => startEditing(category)}>編集</button>
@@ -153,6 +159,17 @@ export function CategoriesPage() {
             <label>
               <span>分類名 <b className="required">必須</b></span>
               <input value={name} onChange={(event) => setName(event.target.value)} maxLength={100} placeholder="例：Windows" />
+            </label>
+            <label>
+              <span>分類の説明</span>
+              <textarea
+                value={description}
+                onChange={(event) => setDescription(event.target.value)}
+                maxLength={500}
+                rows={3}
+                placeholder="例：Windowsの起動、終了、画面操作に関するFAQ"
+              />
+              <small>{description.length} / 500文字</small>
             </label>
             <label>
               <span>{editingCategory ? "移動先" : "親となる分類"}</span>

@@ -5,9 +5,9 @@
 | 項目 | 内容 |
 |---|---|
 | 文書名 | ローカルFAQデータ・Git除外詳細設計書 |
-| 版 | 0.6（DB第2版と旧バックアップ移行反映版） |
+| 版 | 0.10（Codex FAQ標準構成の保存・Git影響確認版） |
 | 作成日 | 2026-08-08 |
-| 上位文書 | `FAQシステム要件定義書.md` v0.6、`FAQシステム基本設計書.md` v1.3 |
+| 上位文書 | `FAQシステム要件定義書.md` v0.9、`FAQシステム基本設計書.md` v1.7 |
 | 対象 | 利用者が作成したFAQデータをGitHub等へ含めないための保存・検査設計 |
 
 ## 2. 目的
@@ -15,6 +15,8 @@
 利用者がアプリ上で作成したFAQ、履歴、添付画像、HTML手順書、バックアップなどを、ソースコードのGitリポジトリやGitHub等のリリースへ混入させない。
 
 FAQの題材が生成AI活用事例、PCトラブル、その他の内容であるかにかかわらず、同じ保護を適用する。本設計はFAQの題材を制限するものではない。
+
+Codex FAQ標準構成は、既存の概要とTiptap本文へ記載する内容・順序の規則であり、新しいDB列、ファイル形式、保存先、バックアップ対象、Git除外パターンを追加しない。標準構成で作成された提案も従来どおり利用者確認前のローカルFAQデータとして扱い、`codex-inbox`へ保存してソース管理とリリースから除外する。
 
 ## 3. 結論
 
@@ -79,7 +81,13 @@ C:\Users\{Windowsユーザー}\AppData\Local\jp.local.webknowledgesystem\
 ├─ restore-staging/
 ├─ safety-backups/
 ├─ settings/
-└─ temp/
+├─ temp/
+├─ codex-bridge/
+│  ├─ categories.json
+│  └─ delegations/
+│     └─ {delegationId}.knowledge-delegation.json
+└─ codex-inbox/
+   └─ {requestId}.knowledge-proposal.json
 ```
 
 | ディレクトリ | 内容 |
@@ -92,6 +100,8 @@ C:\Users\{Windowsユーザー}\AppData\Local\jp.local.webknowledgesystem\
 | `safety-backups` | 復元直前に自動作成するローカル安全バックアップ |
 | `settings` | DB外の端末設定 |
 | `temp` | FAQ保存前の一時画像など |
+| `codex-bridge` | FAQ本文を含まない分類カタログと、利用者が画面で選んだFAQだけを含む修正・統合用の明示委譲ファイル。 |
+| `codex-inbox` | 利用者確認前のCodex FAQ提案。DBへ未反映のローカル利用者データとして扱う。 |
 
 ### 5.2 禁止する保存先
 
@@ -136,11 +146,13 @@ Rustバックエンドに`DataRootService`を置き、アプリ起動時に一�
 ### 5.6 DB版更新と復元時移行
 
 - DBスキーマ第2版では、`articles`へ新着表示終了日、更新表示終了日、非表示の3項目を追加する。
-- 新規DBは第1版の初期構造を作成後、未適用マイグレーションを順番に実行して第2版にする。
-- 第1版DBを開いた場合は、利用者データフォルダ内の同じDBへトランザクションで第2版マイグレーションを適用する。既存FAQの新着・更新は未設定、非表示はOFFとする。
-- 第1版DBを含む完全バックアップは復元対象として許可し、復元直後に同じ移行を実行する。現在のアプリより新しいDB版は復元しない。
+- DBスキーマ第3版では、`categories.description`と`codex_proposal_receipts`を追加する。既存分類の説明は空文字とし、既存FAQを変更しない。
+- DBスキーマ第4版では、確認待ち・承認・却下のCodex提案履歴と依頼系列を保持する`codex_proposal_history`を追加する。既存FAQを変更しない。
+- 新規DBは第1版の初期構造を作成後、未適用マイグレーションを順番に実行して第4版にする。
+- 第1～3版DBを開いた場合は、利用者データフォルダ内の同じDBへ各マイグレーションをトランザクションで適用する。既存FAQの新着・更新は未設定、非表示はOFFとする。
+- 第1～3版DBを含む完全バックアップは復元対象として許可し、復元直後に同じ移行を実行する。現在のアプリより新しいDB版は復元しない。
 - マイグレーションSQLはソース管理対象とするが、移行対象の実DBとバックアップは従来どおりリポジトリ外へ置く。
-- 自動テストではOS一時フォルダに第1版DBを作成し、第2版への移行、既存FAQの保持、既定値を確認する。
+- 自動テストではOS一時フォルダに旧DBを作成し、第4版への移行、既存FAQの保持、分類説明の既定値、受付記録・提案履歴テーブルを確認する。
 
 ## 6. `.gitignore`設計
 
@@ -152,10 +164,11 @@ Rustバックエンドに`DataRootService`を置き、アプリ起動時に一�
 
 | 分類 | 主なパターン |
 |---|---|
-| ルート直下の誤生成データ | `/data/`、`/attachments/`、`/manuals/`、`/backup/`、`/exports/`、`/logs/` |
+| ルート直下の誤生成データ | `/data/`、`/attachments/`、`/manuals/`、`/backup/`、`/exports/`、`/logs/`、`/codex-inbox/`、`/codex-bridge/` |
 | SQLite | `*.db`、`*.db-*`、`*.sqlite*` |
 | フルバックアップ | `*.faqbackup`、`*.faqbackup.*` |
 | JSONエクスポート | `*.knowledge-export.json` |
+| Codex提案・委譲 | `*.knowledge-proposal.json`、`*.knowledge-delegation.json` |
 | 作成途中・復元退避 | `*.partial`、`/restore-staging/`、`/safety-backups/`、`/tmp/` |
 | ローカル設定 | `.env`、`.env.*`、`/settings/local/` |
 | ビルド成果物 | `/node_modules/`、`/dist/`、`/src-tauri/target/` |
@@ -202,7 +215,7 @@ scripts/check-no-runtime-data.ps1
 ルート相対パスで次を拒否する。
 
 ```text
-^(data|attachments|manuals|backup|backups|exports|logs|restore-staging|safety-backups|tmp)/
+^(data|attachments|manuals|backup|backups|exports|logs|restore-staging|safety-backups|tmp|codex-inbox|codex-bridge)/
 ```
 
 場所にかかわらず次を拒否する。
@@ -217,6 +230,8 @@ scripts/check-no-runtime-data.ps1
 *.faqbackup
 *.faqbackup.*
 *.knowledge-export.json
+*.knowledge-proposal.json
+*.knowledge-delegation.json
 ```
 
 `src/features/attachments`のようなソースコード用ディレクトリは、ルート直下ではないため拒否しない。アプリアイコンや画面素材も、`src/assets`または`src-tauri/icons`にある場合は許可する。
@@ -287,6 +302,33 @@ Tauriの`bundle.resources`は、ソースに含まれる静的リソースだけ
 - リポジトリ配下へ誤保存しても、`.gitignore`と検査スクリプトがGit登録を防ぐ。
 - 復元前の安全バックアップは利用者データルート内の`safety-backups`へ作成し、フルバックアップへ再帰的に含めない。
 
+### 10.1 Codexによる新規FAQ下書き時の取扱い
+
+- KnowledgeAppは起動時、分類変更後、復元後、提案一覧更新時に`codex-bridge/categories.json`を再生成する。FAQ本文・概要・件数・履歴・添付・手順書は含めない。
+- KnowledgeApp専用Codexプラグインの通常コマンドは、`%LOCALAPPDATA%\jp.local.webknowledgesystem\codex-bridge\categories.json`だけを読み、`codex-inbox`へだけ提案を書き込む。SQLiteを開く機能を持たせない。
+- 提案は`{requestId}.knowledge-proposal.json`とし、同じフォルダに一意な`.partial`を完成させてから名称変更する。同じ受付番号が存在する場合は上書きしない。
+- アプリは通常ファイル、固定拡張子、最大1MB、ファイル名と受付UUID一致、厳格JSON、許可リッチテキストを確認する。新規・統合は画像なし、修正は委譲元と同じ画像参照集合に限定し、不正提案からDBや添付フォルダを変更しない。
+- 取込時は既存分類、または新規分類案1件をRust側で再検証し、FAQ下書きと受付記録を同じDBトランザクションで保存する。成功後に提案ファイルを削除し、削除できない場合も受付記録で再取込を防ぐ。
+- `codex-inbox`、`codex-bridge`、`.knowledge-proposal.json`、`.partial`はフルバックアップ対象外とする。分類カタログは復元後に再生成し、確認前提案は端末移行の正本にしない。
+- 提案箱・分類カタログをGitへ追加せず、ルート除外、拡張子除外、コミット前検査、CI検査で検出する。
+- 会社FAQの元情報をCodexへ提示できるかは会社規定を優先し、利用者が会話で明示的に提供した内容以外を自動収集しない。
+- 結論、手順、注意、備考、参考リンクの標準構成は提案JSON内の既存`faq.summary`と`faq.bodyDoc`で表現し、提案ファイルの保存場所、拡張子、上限、原子的保存、Git除外を変更しない。
+
+### 10.2 CodexによるFAQ整理・統合時の取扱い
+
+- 既存FAQ1件の修正または2～10件の統合では、利用者がKnowledgeApp画面で対象を選び、`codex-bridge/delegations`へ委譲ファイルを作成する。Codexがリポジトリだけを確認してもFAQ実データを取得できない構成を維持する。
+- 委譲ファイルにはFAQ ID、委譲時更新日時、分類ID・表示階層、タイトル、概要、Tiptap本文、状態、重要度、添付のID・名称・代替文・形式だけを含める。DB、検索・閲覧履歴、未選択FAQ、添付画像本体、ローカルファイルパスを含めない。
+- Codexプラグインは利用者が依頼文で指定した委譲番号の通常ファイルだけを最大5MBまで読み、別番号やフォルダ全体を走査しない。
+- 修正・統合提案の`seriesId`、元FAQ ID・更新日時が委譲ファイルと一致することをRust側で再検証する。
+- 修正は現在DBの更新日時も照合し、委譲後に変更されたFAQへ古い案を上書きしない。統合は新規下書きだけを作り、元FAQを変更・削除しない。
+- 提案はDB第4版の履歴へ保存する。却下後も内容を保持し、同一依頼系列で自身より新しい提案がない最新版だけを再検討へ戻す。
+- 多数FAQの整理・統合を依頼する場合は、利用者が`.knowledge-export.json`をリポジトリ外へ出力し、対象ファイルと作業範囲を明示する。
+- Codexが作成した統合候補は、アプリのJSONインポートで形式検証、差分プレビュー、利用者確認を行い、事前のフルバックアップ後にトランザクションで反映する。
+- Codexから`knowledge.db`、WAL、SHM、添付画像フォルダを直接変更しない。検索索引、関連情報、論理削除、添付参照の不整合を防ぐため、SQLiteへの直接書き込みを統合経路にしない。
+- JSONエクスポートと統合候補をGitへ追加せず、作業後も会社規定と利用者のデータ管理方針に従ってリポジトリ外で保管または削除する。
+- 会社FAQをCodexへ提示できるかは会社規定を優先し、パスワード、秘密鍵、個人情報その他の保存禁止情報を含めない。
+- JSONエクスポート・インポート機能が未実装の間は、Codexによる実FAQの一括整理・直接統合を正規運用として実施しない。
+
 ## 11. Git開始時の確認
 
 2026-08-08にローカルGitリポジトリを初期化し、`.gitignore`と共有hookを設定した。GitHubへ初めてpushする前、および除外規則を変更した場合は次を確認する。
@@ -320,10 +362,17 @@ GitHub等へpushした場合、通常の削除コミットだけでは履歴に�
 | DATA-02 | FAQ登録、画像追加、手順書追加後もリポジトリ配下に利用者データが生成されない。 |
 | DATA-03 | appLocalDataDirの解決に失敗した場合、`./data`へ代替保存せず起動エラーになる。 |
 | DATA-04 | React側から任意のDB保存先を指定できない。 |
+| DATA-05 | Codex用分類カタログに分類メタデータだけが含まれ、FAQ本文・件数・履歴を含まない。 |
+| DATA-06 | Codex提案を承認するまでSQLiteへFAQを登録せず、承認後は必ず下書きとして登録する。 |
+| DATA-07 | 新規分類案の作成、FAQ下書き、受付記録が同じトランザクションで成功または失敗する。 |
+| DATA-08 | 既存FAQの委譲ファイルに、選択したFAQ以外の本文、DB、履歴、添付画像本体、ローカルパスが含まれない。 |
+| DATA-09 | 修正案は委譲後に元FAQが変更されていない場合だけ反映し、統合案は元FAQを変更せず新規下書きにする。 |
+| DATA-10 | 却下提案を履歴へ保持し、同一依頼系列では最新の却下案だけを再検討できる。 |
 | GIT-01 | `.gitignore`がDB、ジャーナル、バックアップ、JSONエクスポート、ルートの利用者データフォルダを無視する。 |
 | GIT-02 | 禁止ファイルを強制的にステージした場合、コミット前検査が失敗する。 |
 | GIT-03 | 禁止ファイルが追跡されている場合、CIが失敗する。 |
 | GIT-04 | FAQへ固有の確認用文字列を登録しても、リポジトリの追跡ファイルからその文字列が検出されない。 |
+| GIT-05 | `codex-inbox`、`codex-bridge`、`.knowledge-proposal.json`、`.knowledge-delegation.json`を強制的にステージした場合、コミット前・CI検査が失敗する。 |
 | REL-01 | インストーラーにDB、FAQ、履歴、画像、手順書、バックアップが含まれない。 |
 | REL-02 | 新規PCへインストールした直後はFAQが空である。 |
 | REL-03 | アプリ更新時は既存のappLocalDataDirを維持し、利用者データを上書きしない。 |
@@ -363,6 +412,13 @@ GitHub等へpushした場合、通常の削除コミットだけでは履歴に�
 | 添付画像表示範囲 | 完了 | Tauri asset protocolの読取範囲を添付画像と保存前一時画像の2フォルダへ限定し、DBや設定ファイルを公開しない。 |
 | 画像付きFAQ複製 | 完了 | 元画像の形式・サイズ・SHA-256を再検証し、新しいUUIDで一時保存した後、複製先FAQ専用フォルダへ確定する。元FAQと複製先は画像ファイルを共有しない。 |
 | DB第2版移行 | 完了 | 新着・更新表示終了日と非表示を追加し、第1版DBを開いた場合および旧バックアップ復元後に自動移行する。OS一時フォルダの結合テストで確認した。 |
+| DB第3版移行 | 完了 | 分類説明とCodex受付記録を追加し、第1版DB・旧バックアップから第3版へ移行する結合テストを確認した。 |
+| DB第4版移行 | 完了 | Codex提案履歴・依頼系列を追加し、第1版DB・旧バックアップから第4版へ移行する結合テストを確認した。 |
+| Codex分類カタログ | 完了 | appLocalDataDir内へ分類メタデータだけを原子的に出力し、FAQ件数・本文を含めないテストを確認した。 |
+| Codex提案箱 | 完了 | 固定保存先、1MB上限、厳格形式、新規・統合の画像拒否、修正画像参照の維持、利用者確認後の反映、受付UUIDによる重複防止を実装した。 |
+| Codexプラグイン | 完了 | マニフェスト・スキル・分類取得・提案送信コマンドをリポジトリで管理し、検証スクリプトと一時フォルダを使う自動テストを確認した。 |
+| Codex既存FAQ委譲 | 完了 | 1件の修正・2～10件の統合を明示選択し、固定委譲番号からだけ取得するプラグイン試験を確認した。 |
+| Codex提案履歴 | 完了 | 承認・却下履歴、最新却下案だけの再検討、版競合拒否、統合元FAQ保持をDB・画面テストで確認した。 |
 
 ## 15. 設計変更時のルール
 
@@ -378,8 +434,8 @@ GitHub等へpushした場合、通常の削除コミットだけでは履歴に�
 ## 16. 参照資料
 
 - `AGENTS.md`
-- `FAQシステム要件定義書.md` v0.6
-- `FAQシステム基本設計書.md` v1.3
+- `FAQシステム要件定義書.md` v0.9
+- `FAQシステム基本設計書.md` v1.7
 - [Tauri 2：appLocalDataDir](https://v2.tauri.app/reference/javascript/api/namespacepath/#applocaldatadir)
 - [Tauri 2：ファイルシステム](https://v2.tauri.app/plugin/file-system/)
 - [Git：gitignore](https://git-scm.com/docs/gitignore)

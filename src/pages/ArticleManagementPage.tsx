@@ -8,6 +8,7 @@ import type {
   AppError,
   ArticleStatus,
   Category,
+  CodexDelegationResult,
   ManagementArticlePage,
   ManagementArticlesInput,
 } from "../types/domain";
@@ -28,6 +29,8 @@ export function ArticleManagementPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<AppError | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [selectedForMerge, setSelectedForMerge] = useState<Set<string>>(new Set());
+  const [delegation, setDelegation] = useState<CodexDelegationResult | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -66,6 +69,8 @@ export function ArticleManagementPage() {
     setNotice(null);
     setPage(1);
     setDeleted(nextDeleted);
+    setSelectedForMerge(new Set());
+    setDelegation(null);
   };
 
   const deleteArticle = async (id: string, title: string) => {
@@ -109,6 +114,31 @@ export function ArticleManagementPage() {
       navigate(`/articles/${copy.id}/edit`);
     } catch (caught) {
       setError(toAppError(caught));
+      setBusyId(null);
+    }
+  };
+
+  const toggleMergeSelection = (id: string) => {
+    setSelectedForMerge((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else if (next.size < 10) next.add(id);
+      return next;
+    });
+    setDelegation(null);
+  };
+
+  const delegateMerge = async () => {
+    if (selectedForMerge.size < 2 || selectedForMerge.size > 10) return;
+    if (!window.confirm(`選択した${selectedForMerge.size}件のFAQ本文をCodexへ渡す委譲ファイルを作成しますか？\n統合案は新しい下書きになり、元FAQは変更・削除されません。`)) return;
+    setBusyId("codex-merge");
+    setError(null);
+    setDelegation(null);
+    try {
+      setDelegation(await knowledgeApi.createCodexDelegation("merge", [...selectedForMerge]));
+    } catch (caught) {
+      setError(toAppError(caught));
+    } finally {
       setBusyId(null);
     }
   };
@@ -162,12 +192,31 @@ export function ArticleManagementPage() {
       </form>
 
       {notice && <div className="success-notice management-notice" role="status">{notice}</div>}
+      {delegation && (
+        <section className="success-notice codex-delegation-notice" role="status">
+          <strong>Codexへの統合委譲を準備しました。</strong>
+          <p>Codexの新しいタスクへ、次の文章をそのまま送ってください。</p>
+          <code>{delegation.prompt}</code>
+          <small>委譲番号：{delegation.delegationId}</small>
+        </section>
+      )}
       {error && <ErrorState error={error} onRetry={() => void load()} />}
 
       <div className="management-result-heading">
         <strong>{loading ? "読み込み中…" : `${result.total}件`}</strong>
         <span>{deleted ? "削除済みFAQは復元できます。" : "削除操作ではデータを完全消去しません。"}</span>
       </div>
+      {!deleted && (
+        <div className="management-codex-actions panel">
+          <div>
+            <strong>CodexでFAQを統合</strong>
+            <span>統合するFAQを2～10件選択してください。元FAQはそのまま残ります。</span>
+          </div>
+          <button type="button" className="button secondary" disabled={selectedForMerge.size < 2 || busyId === "codex-merge"} onClick={() => void delegateMerge()}>
+            選択中の{selectedForMerge.size}件をCodexへ委譲
+          </button>
+        </div>
+      )}
 
       {loading && <LoadingState label="FAQ管理一覧を読み込んでいます…" />}
       {!loading && !error && result.items.length === 0 && (
@@ -179,11 +228,22 @@ export function ArticleManagementPage() {
       {!loading && !error && result.items.length > 0 && (
         <div className="management-table-wrap panel">
           <table className="management-table">
-            <thead><tr><th>FAQ</th><th>分類</th><th>状態</th><th>最終更新</th><th><span className="sr-only">操作</span></th></tr></thead>
+            <thead><tr>{!deleted && <th>統合</th>}<th>FAQ</th><th>分類</th><th>状態</th><th>最終更新</th><th><span className="sr-only">操作</span></th></tr></thead>
             <tbody>
               {result.items.map((article) => (
                 <tr key={article.id}>
-                  <td>
+                  {!deleted && (
+                    <td className="management-select-cell">
+                      <input
+                        type="checkbox"
+                        aria-label={`「${article.title}」を統合対象にする`}
+                        checked={selectedForMerge.has(article.id)}
+                        disabled={!selectedForMerge.has(article.id) && selectedForMerge.size >= 10}
+                        onChange={() => toggleMergeSelection(article.id)}
+                      />
+                    </td>
+                  )}
+                  <td className="management-faq-cell">
                     <Link to={`/articles/${article.id}`}>{article.title}</Link>
                     {article.summary && <small>{article.summary}</small>}
                   </td>

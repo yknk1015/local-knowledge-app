@@ -22,6 +22,7 @@ describe("ArticleEditorPage", () => {
         id: "category-1",
         parentId: null,
         name: "操作全般",
+        description: "",
         depth: 1,
         sortOrder: 0,
         articleCount: 0,
@@ -60,7 +61,7 @@ describe("ArticleEditorPage", () => {
       value: vi.fn(),
     });
     vi.spyOn(knowledgeApi, "listCategories").mockResolvedValue([
-      { id: "category-1", parentId: null, name: "操作全般", depth: 1, sortOrder: 0, articleCount: 0 },
+      { id: "category-1", parentId: null, name: "操作全般", description: "", depth: 1, sortOrder: 0, articleCount: 0 },
     ]);
     const save = vi.spyOn(knowledgeApi, "saveArticle");
 

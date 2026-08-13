@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   listArticlesForManagement: vi.fn(),
   deleteArticle: vi.fn(),
   restoreArticle: vi.fn(),
+  duplicateArticle: vi.fn(),
+  createCodexDelegation: vi.fn(),
 }));
 
 vi.mock("../api/knowledgeApi", async (importOriginal) => {
@@ -37,7 +39,7 @@ describe("ArticleManagementPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.listCategories.mockResolvedValue([
-      { id: "category-1", parentId: null, name: "Windows", depth: 1, sortOrder: 0, articleCount: 1 },
+      { id: "category-1", parentId: null, name: "Windows", description: "", depth: 1, sortOrder: 0, articleCount: 1 },
     ]);
     vi.spyOn(window, "confirm").mockReturnValue(true);
   });
@@ -74,5 +76,23 @@ describe("ArticleManagementPage", () => {
 
     await waitFor(() => expect(mocks.restoreArticle).toHaveBeenCalledWith("article-1"));
     expect(await screen.findByText("「画面が暗い」を復元しました。")).toBeInTheDocument();
+  });
+
+  it("delegates two selected FAQs to Codex for a non-destructive merge", async () => {
+    const second = { ...article, id: "article-2", title: "画面が明るすぎる" };
+    mocks.listArticlesForManagement.mockResolvedValue({ items: [article, second], total: 2, page: 1, pageSize: 50 });
+    mocks.createCodexDelegation.mockResolvedValue({
+      delegationId: "delegation-id",
+      prompt: "KnowledgeAppの委譲番号 delegation-id のFAQを統合してください。",
+      filePath: "C:\\local\\delegation.json",
+    });
+    render(<MemoryRouter><ArticleManagementPage /></MemoryRouter>);
+
+    fireEvent.click(await screen.findByRole("checkbox", { name: /「画面が暗い」/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /「画面が明るすぎる」/ }));
+    fireEvent.click(screen.getByRole("button", { name: "選択中の2件をCodexへ委譲" }));
+
+    await waitFor(() => expect(mocks.createCodexDelegation).toHaveBeenCalledWith("merge", ["article-1", "article-2"]));
+    expect(await screen.findByText(/KnowledgeAppの委譲番号 delegation-id/)).toBeInTheDocument();
   });
 });

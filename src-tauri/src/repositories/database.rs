@@ -1,7 +1,7 @@
 use std::{path::Path, time::Duration};
 
 use chrono::Utc;
-use rusqlite::{Connection, OpenFlags, OptionalExtension, backup::Backup, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, backup::Backup, params};
 use serde_json::Value;
 use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
@@ -9,16 +9,19 @@ use uuid::Uuid;
 use crate::{
     errors::{AppError, AppResult},
     models::{
-        Article, ArticleAttachment, ArticleListItem, BackupCounts, Category,
-        ManagementArticleListItem, ManagementArticlePage, ManagementArticlesInput,
-        SearchArticlesInput,
+        Article, ArticleAttachment, ArticleListItem, BackupCounts, Category, CodexFaqProposal,
+        CodexProposalHistoryItem, CodexProposalKind, CodexSourceArticle, ManagementArticleListItem,
+        ManagementArticlePage, ManagementArticlesInput, SearchArticlesInput,
     },
 };
 
 const INITIAL_MIGRATION: &str = include_str!("../../migrations/0001_initial.sql");
 const ARTICLE_DISPLAY_FLAGS_MIGRATION: &str =
     include_str!("../../migrations/0002_article_display_flags.sql");
-const CURRENT_SCHEMA_VERSION: i64 = 2;
+const CODEX_PROPOSALS_MIGRATION: &str = include_str!("../../migrations/0003_codex_proposals.sql");
+const CODEX_DELEGATION_HISTORY_MIGRATION: &str =
+    include_str!("../../migrations/0004_codex_delegation_history.sql");
+const CURRENT_SCHEMA_VERSION: i64 = 4;
 
 pub struct Database {
     connection: Connection,
@@ -50,6 +53,37 @@ pub struct AttachmentRecord {
     pub sha256: String,
     pub alt_text: String,
     pub created_at: String,
+}
+
+pub struct NewCategoryRecord<'a> {
+    pub id: &'a str,
+    pub name: &'a str,
+    pub description: &'a str,
+    pub parent_id: Option<&'a str>,
+}
+
+pub struct CodexProposalArticleRecord<'a> {
+    pub request_id: &'a str,
+    pub proposal_kind: CodexProposalKind,
+    pub source_articles: &'a [CodexSourceArticle],
+    pub article_id: &'a str,
+    pub category_id: &'a str,
+    pub new_category: Option<NewCategoryRecord<'a>>,
+    pub title: &'a str,
+    pub summary: &'a str,
+    pub body_doc: &'a Value,
+    pub body_plain_text: &'a str,
+    pub importance: i64,
+}
+
+pub struct CodexProposalRevisionRecord<'a> {
+    pub request_id: &'a str,
+    pub source_article: &'a CodexSourceArticle,
+    pub title: &'a str,
+    pub summary: &'a str,
+    pub body_doc: &'a Value,
+    pub body_plain_text: &'a str,
+    pub importance: i64,
 }
 
 impl Database {
@@ -169,6 +203,16 @@ impl Database {
                 .execute_batch(ARTICLE_DISPLAY_FLAGS_MIGRATION)
                 .map_err(|_| AppError::database("FAQデータの更新に失敗しました。"))?;
         }
+        if version < 3 {
+            self.connection
+                .execute_batch(CODEX_PROPOSALS_MIGRATION)
+                .map_err(|_| AppError::database("Codex提案用データの更新に失敗しました。"))?;
+        }
+        if version < 4 {
+            self.connection
+                .execute_batch(CODEX_DELEGATION_HISTORY_MIGRATION)
+                .map_err(|_| AppError::database("Codex委譲・履歴用データの更新に失敗しました。"))?;
+        }
         Ok(())
     }
 
@@ -213,17 +257,17 @@ impl Database {
         let mut statement = self.connection.prepare(
             r#"
             WITH RECURSIVE category_tree AS (
-                SELECT id, parent_id, name, depth, sort_order,
+                SELECT id, parent_id, name, description, depth, sort_order,
                        printf('%08d', sort_order) AS sort_path
                   FROM categories
                  WHERE parent_id IS NULL
                 UNION ALL
-                SELECT child.id, child.parent_id, child.name, child.depth, child.sort_order,
+                SELECT child.id, child.parent_id, child.name, child.description, child.depth, child.sort_order,
                        category_tree.sort_path || '.' || printf('%08d', child.sort_order)
                   FROM categories child
                   JOIN category_tree ON child.parent_id = category_tree.id
             )
-            SELECT tree.id, tree.parent_id, tree.name, tree.depth, tree.sort_order,
+            SELECT tree.id, tree.parent_id, tree.name, tree.description, tree.depth, tree.sort_order,
                    (SELECT COUNT(*) FROM articles a
                      WHERE a.category_id = tree.id AND a.deleted_at IS NULL) AS article_count
               FROM category_tree tree
@@ -235,87 +279,55 @@ impl Database {
                 id: row.get(0)?,
                 parent_id: row.get(1)?,
                 name: row.get(2)?,
-                depth: row.get(3)?,
-                sort_order: row.get(4)?,
-                article_count: row.get(5)?,
+                description: row.get(3)?,
+                depth: row.get(4)?,
+                sort_order: row.get(5)?,
+                article_count: row.get(6)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
     }
 
+    #[cfg(test)]
     pub fn create_category(&mut self, name: &str, parent_id: Option<&str>) -> AppResult<Category> {
-        let name = validate_category_name(name)?;
-
-        let transaction = self.connection.transaction()?;
-        let depth = match parent_id {
-            Some(parent_id) => transaction
-                .query_row(
-                    "SELECT depth + 1 FROM categories WHERE id = ?1",
-                    [parent_id],
-                    |row| row.get::<_, i64>(0),
-                )
-                .optional()?
-                .ok_or_else(|| {
-                    AppError::new(
-                        "CAT-002",
-                        "親となる分類が見つかりません。",
-                        "分類一覧を更新して、もう一度選択してください。",
-                    )
-                })?,
-            None => 1,
-        };
-        if depth > 5 {
-            return Err(AppError::new(
-                "CAT-003",
-                "分類は5階層まで作成できます。",
-                "より上の階層を親として選択してください。",
-            ));
-        }
-
-        let normalized_name = normalize(name);
-        let duplicate: bool = transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM categories WHERE parent_id IS ?1 AND normalized_name = ?2)",
-            params![parent_id, normalized_name],
-            |row| row.get(0),
-        )?;
-        if duplicate {
-            return Err(AppError::new(
-                "CAT-004",
-                "同じ場所に同名の分類があります。",
-                "別の分類名を入力してください。",
-            ));
-        }
-
-        let sort_order: i64 = transaction.query_row(
-            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM categories WHERE parent_id IS ?1",
-            [parent_id],
-            |row| row.get(0),
-        )?;
-        let id = Uuid::now_v7().to_string();
-        let now = Utc::now().to_rfc3339();
-        transaction.execute(
-            "INSERT INTO categories(id, parent_id, name, normalized_name, depth, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
-            params![id, parent_id, name, normalized_name, depth, sort_order, now],
-        )?;
-        transaction.commit()?;
-
-        Ok(Category {
-            id,
-            parent_id: parent_id.map(str::to_owned),
-            name: name.to_owned(),
-            depth,
-            sort_order,
-            article_count: 0,
-        })
+        self.create_category_with_description(name, "", parent_id)
     }
 
+    pub fn create_category_with_description(
+        &mut self,
+        name: &str,
+        description: &str,
+        parent_id: Option<&str>,
+    ) -> AppResult<Category> {
+        let name = validate_category_name(name)?;
+        let description = validate_category_description(description)?;
+
+        let transaction = self.connection.transaction()?;
+        let id = Uuid::now_v7().to_string();
+        let category = insert_category(&transaction, &id, name, description, parent_id)?;
+        transaction.commit()?;
+        Ok(category)
+    }
+
+    #[cfg(test)]
     pub fn update_category(
         &mut self,
         id: &str,
         name: &str,
         parent_id: Option<&str>,
     ) -> AppResult<Category> {
+        self.update_category_with_description(id, name, "", parent_id)
+    }
+
+    pub fn update_category_with_description(
+        &mut self,
+        id: &str,
+        name: &str,
+        description: &str,
+        parent_id: Option<&str>,
+    ) -> AppResult<Category> {
         let name = validate_category_name(name)?;
+        let description = validate_category_description(description)?;
         let transaction = self.connection.transaction()?;
         let current = transaction
             .query_row(
@@ -414,7 +426,7 @@ impl Database {
             r#"
             UPDATE categories
                SET parent_id = ?2, name = ?3, normalized_name = ?4,
-                   depth = ?5, sort_order = ?6, updated_at = ?7
+                   description = ?5, depth = ?6, sort_order = ?7, updated_at = ?8
              WHERE id = ?1
             "#,
             params![
@@ -422,6 +434,7 @@ impl Database {
                 parent_id,
                 name,
                 normalized_name,
+                description,
                 target_depth,
                 sort_order,
                 now
@@ -612,6 +625,407 @@ impl Database {
         )?;
         transaction.commit()?;
         self.get_article(&id)
+    }
+
+    pub fn is_codex_proposal_accepted(&self, request_id: &str) -> AppResult<bool> {
+        self.connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM codex_proposal_receipts WHERE request_id = ?1)",
+                [request_id],
+                |row| row.get(0),
+            )
+            .map_err(AppError::from)
+    }
+
+    pub fn record_codex_proposal(&self, proposal: &CodexFaqProposal) -> AppResult<()> {
+        let payload_json = serde_json::to_string(proposal).map_err(|_| {
+            AppError::new(
+                "CDX-002",
+                "Codex提案を履歴へ記録できませんでした。",
+                "提案一覧を更新し、もう一度お試しください。",
+            )
+        })?;
+        let existing: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT payload_json FROM codex_proposal_history WHERE request_id = ?1",
+                [&proposal.request_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(existing) = existing {
+            if existing != payload_json {
+                return Err(AppError::new(
+                    "CDX-013",
+                    "同じ受付番号で内容の異なるCodex提案が届いています。",
+                    "Codexへ新しい受付番号で提案を作り直すよう依頼してください。",
+                ));
+            }
+            return Ok(());
+        }
+        let series_id = proposal
+            .series_id
+            .as_deref()
+            .unwrap_or(&proposal.request_id);
+        self.connection.execute(
+            r#"
+            INSERT INTO codex_proposal_history(
+                request_id, series_id, proposal_kind, payload_json, status, received_at
+            ) VALUES (?1, ?2, ?3, ?4, 'pending', ?5)
+            "#,
+            params![
+                proposal.request_id,
+                series_id,
+                proposal.proposal_kind.as_str(),
+                payload_json,
+                Utc::now().to_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_pending_codex_proposal(&self, request_id: &str) -> AppResult<CodexFaqProposal> {
+        let payload: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT payload_json FROM codex_proposal_history WHERE request_id = ?1 AND status = 'pending'",
+                [request_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        parse_stored_proposal(payload.ok_or_else(|| {
+            AppError::new(
+                "CDX-003",
+                "確認待ちのCodex提案が見つかりません。",
+                "提案一覧または履歴を更新して、もう一度選択してください。",
+            )
+        })?)
+    }
+
+    pub fn list_pending_codex_proposals(&self) -> AppResult<Vec<CodexFaqProposal>> {
+        let mut statement = self.connection.prepare(
+            "SELECT payload_json FROM codex_proposal_history WHERE status = 'pending' ORDER BY history_id DESC",
+        )?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        rows.map(|row| parse_stored_proposal(row?)).collect()
+    }
+
+    pub fn list_codex_proposal_history(&self) -> AppResult<Vec<CodexProposalHistoryItem>> {
+        let mut statement = self.connection.prepare(
+            r#"
+            SELECT h.history_id, h.payload_json, h.status, h.received_at, h.decided_at,
+                   h.accepted_article_id,
+                   CASE WHEN h.status = 'rejected' AND NOT EXISTS (
+                       SELECT 1 FROM codex_proposal_history newer
+                        WHERE newer.series_id = h.series_id
+                          AND newer.history_id > h.history_id
+                   ) THEN 1 ELSE 0 END AS can_reopen
+              FROM codex_proposal_history h
+             WHERE h.status <> 'pending'
+             ORDER BY h.history_id DESC
+            "#,
+        )?;
+        let rows = statement.query_map([], |row| {
+            let payload: String = row.get(1)?;
+            let proposal = serde_json::from_str(&payload).map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    1,
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                )
+            })?;
+            Ok(CodexProposalHistoryItem {
+                history_id: row.get(0)?,
+                proposal,
+                status: row.get(2)?,
+                received_at: row.get(3)?,
+                decided_at: row.get(4)?,
+                accepted_article_id: row.get(5)?,
+                can_reopen: row.get(6)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
+    }
+
+    pub fn reject_codex_proposal(&mut self, request_id: &str) -> AppResult<()> {
+        let transaction = self.connection.transaction()?;
+        let changed = transaction.execute(
+            "UPDATE codex_proposal_history SET status = 'rejected', decided_at = ?2 WHERE request_id = ?1 AND status = 'pending'",
+            params![request_id, Utc::now().to_rfc3339()],
+        )?;
+        if changed == 0 {
+            return Err(AppError::new(
+                "CDX-003",
+                "確認待ちのCodex提案が見つかりません。",
+                "提案一覧を更新し、もう一度選択してください。",
+            ));
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn reopen_rejected_codex_proposal(&mut self, request_id: &str) -> AppResult<()> {
+        let transaction = self.connection.transaction()?;
+        let record: Option<(i64, String, String)> = transaction
+            .query_row(
+                "SELECT history_id, series_id, status FROM codex_proposal_history WHERE request_id = ?1",
+                [request_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        let Some((history_id, series_id, status)) = record else {
+            return Err(codex_history_not_found());
+        };
+        if status != "rejected" {
+            return Err(AppError::new(
+                "CDX-014",
+                "このCodex提案は再検討へ戻せません。",
+                "却下済みの提案を選択してください。",
+            ));
+        }
+        let newer_exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM codex_proposal_history WHERE series_id = ?1 AND history_id > ?2)",
+            params![series_id, history_id],
+            |row| row.get(0),
+        )?;
+        if newer_exists {
+            return Err(AppError::new(
+                "CDX-015",
+                "同じ依頼に、これより新しいCodex提案があります。",
+                "取り違えを防ぐため、同じ依頼では最新の却下案だけを再検討できます。",
+            ));
+        }
+        transaction.execute(
+            "UPDATE codex_proposal_history SET status = 'pending', decided_at = NULL WHERE request_id = ?1",
+            [request_id],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn accept_codex_proposal(
+        &mut self,
+        record: CodexProposalArticleRecord<'_>,
+    ) -> AppResult<(Article, Option<Category>)> {
+        let transaction = self.connection.transaction()?;
+        let already_accepted: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM codex_proposal_receipts WHERE request_id = ?1)",
+            [record.request_id],
+            |row| row.get(0),
+        )?;
+        if already_accepted {
+            return Err(AppError::new(
+                "CDX-006",
+                "このCodex提案はすでに取り込み済みです。",
+                "提案一覧を更新してください。同じFAQは重複登録されていません。",
+            ));
+        }
+        ensure_pending_codex_history(&transaction, record.request_id)?;
+
+        match record.proposal_kind {
+            CodexProposalKind::Create if !record.source_articles.is_empty() => {
+                return Err(AppError::database(
+                    "新規FAQ提案に既存FAQの参照が含まれています。",
+                ));
+            }
+            CodexProposalKind::Merge if record.source_articles.len() >= 2 => {
+                verify_codex_source_versions(&transaction, record.source_articles)?;
+            }
+            CodexProposalKind::Merge => {
+                return Err(AppError::new(
+                    "CDX-002",
+                    "統合提案には2件以上の元FAQが必要です。",
+                    "KnowledgeAppで統合対象を選び直し、Codexへ再依頼してください。",
+                ));
+            }
+            CodexProposalKind::Revise => {
+                return Err(AppError::database(
+                    "修正提案が新規FAQの取込処理へ送られました。",
+                ));
+            }
+            CodexProposalKind::Create => {}
+        }
+
+        let created_category = match record.new_category {
+            Some(category) => {
+                if category.id != record.category_id {
+                    return Err(AppError::database(
+                        "Codex提案の分類情報に不整合があります。",
+                    ));
+                }
+                Some(insert_category(
+                    &transaction,
+                    category.id,
+                    category.name,
+                    category.description,
+                    category.parent_id,
+                )?)
+            }
+            None => {
+                let exists: bool = transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM categories WHERE id = ?1)",
+                    [record.category_id],
+                    |row| row.get(0),
+                )?;
+                if !exists {
+                    return Err(AppError::new(
+                        "CDX-005",
+                        "選択した分類が現在の分類一覧にありません。",
+                        "提案一覧を更新し、所属分類を選び直してください。",
+                    ));
+                }
+                None
+            }
+        };
+
+        let now = Utc::now().to_rfc3339();
+        let body_doc_json = serde_json::to_string(record.body_doc).map_err(|_| {
+            AppError::new(
+                "CDX-002",
+                "Codex提案の回答形式を保存できません。",
+                "Codexへもう一度下書き作成を依頼してください。",
+            )
+        })?;
+        transaction.execute(
+            r#"
+            INSERT INTO articles(
+                id, category_id, title, normalized_title, summary, body_doc_json,
+                body_format_version, body_plain_text, status, importance, created_at, updated_at,
+                new_badge_until, updated_badge_until, is_hidden
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, 'draft', ?8, ?9, ?9, NULL, NULL, 0)
+            "#,
+            params![
+                record.article_id,
+                record.category_id,
+                record.title,
+                normalize(record.title),
+                record.summary,
+                body_doc_json,
+                record.body_plain_text,
+                record.importance,
+                now,
+            ],
+        )?;
+        transaction.execute(
+            "INSERT INTO article_search_documents(article_id, title, summary, body) VALUES (?1, ?2, ?3, ?4)",
+            params![
+                record.article_id,
+                normalize(record.title),
+                normalize(record.summary),
+                normalize(record.body_plain_text),
+            ],
+        )?;
+        transaction.execute(
+            "INSERT INTO article_search_fts(article_id, title, summary, body) VALUES (?1, ?2, ?3, ?4)",
+            params![
+                record.article_id,
+                normalize(record.title),
+                normalize(record.summary),
+                normalize(record.body_plain_text),
+            ],
+        )?;
+        transaction.execute(
+            "INSERT INTO codex_proposal_receipts(request_id, article_id, accepted_at) VALUES (?1, ?2, ?3)",
+            params![record.request_id, record.article_id, now],
+        )?;
+        mark_codex_history_accepted(&transaction, record.request_id, record.article_id, &now)?;
+        transaction.commit()?;
+        let created_category = created_category.map(|mut category| {
+            category.article_count = 1;
+            category
+        });
+        Ok((self.get_article(record.article_id)?, created_category))
+    }
+
+    pub fn accept_codex_revision(
+        &mut self,
+        record: CodexProposalRevisionRecord<'_>,
+    ) -> AppResult<Article> {
+        let transaction = self.connection.transaction()?;
+        let already_accepted: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM codex_proposal_receipts WHERE request_id = ?1)",
+            [record.request_id],
+            |row| row.get(0),
+        )?;
+        if already_accepted {
+            return Err(AppError::new(
+                "CDX-006",
+                "このCodex提案はすでに反映済みです。",
+                "提案一覧を更新してください。同じ修正は重複反映されていません。",
+            ));
+        }
+        ensure_pending_codex_history(&transaction, record.request_id)?;
+        verify_codex_source_versions(&transaction, std::slice::from_ref(record.source_article))?;
+
+        let now = Utc::now().to_rfc3339();
+        let body_doc_json = serde_json::to_string(record.body_doc).map_err(|_| {
+            AppError::new(
+                "CDX-002",
+                "Codex修正案の回答形式を保存できません。",
+                "Codexへもう一度修正を依頼してください。",
+            )
+        })?;
+        let updated = transaction.execute(
+            r#"
+            UPDATE articles
+               SET title = ?2, normalized_title = ?3, summary = ?4,
+                   body_doc_json = ?5, body_plain_text = ?6, importance = ?7,
+                   updated_at = ?8
+             WHERE id = ?1 AND deleted_at IS NULL
+            "#,
+            params![
+                record.source_article.article_id,
+                record.title,
+                normalize(record.title),
+                record.summary,
+                body_doc_json,
+                record.body_plain_text,
+                record.importance,
+                now,
+            ],
+        )?;
+        if updated == 0 {
+            return Err(article_not_found());
+        }
+        transaction.execute(
+            r#"
+            INSERT INTO article_search_documents(article_id, title, summary, body)
+            VALUES (?1, ?2, ?3, ?4)
+            ON CONFLICT(article_id) DO UPDATE SET
+                title = excluded.title, summary = excluded.summary, body = excluded.body
+            "#,
+            params![
+                record.source_article.article_id,
+                normalize(record.title),
+                normalize(record.summary),
+                normalize(record.body_plain_text),
+            ],
+        )?;
+        transaction.execute(
+            "DELETE FROM article_search_fts WHERE article_id = ?1",
+            [&record.source_article.article_id],
+        )?;
+        transaction.execute(
+            "INSERT INTO article_search_fts(article_id, title, summary, body) VALUES (?1, ?2, ?3, ?4)",
+            params![
+                record.source_article.article_id,
+                normalize(record.title),
+                normalize(record.summary),
+                normalize(record.body_plain_text),
+            ],
+        )?;
+        transaction.execute(
+            "INSERT INTO codex_proposal_receipts(request_id, article_id, accepted_at) VALUES (?1, ?2, ?3)",
+            params![record.request_id, record.source_article.article_id, now],
+        )?;
+        mark_codex_history_accepted(
+            &transaction,
+            record.request_id,
+            &record.source_article.article_id,
+            &now,
+        )?;
+        transaction.commit()?;
+        self.get_article(&record.source_article.article_id)
     }
 
     pub fn get_article(&self, id: &str) -> AppResult<Article> {
@@ -842,6 +1256,85 @@ impl Database {
     }
 }
 
+fn parse_stored_proposal(payload: String) -> AppResult<CodexFaqProposal> {
+    serde_json::from_str(&payload)
+        .map_err(|_| AppError::database("保存済みのCodex提案履歴を読み取れませんでした。"))
+}
+
+fn ensure_pending_codex_history(transaction: &Transaction<'_>, request_id: &str) -> AppResult<()> {
+    let pending: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM codex_proposal_history WHERE request_id = ?1 AND status = 'pending')",
+        [request_id],
+        |row| row.get(0),
+    )?;
+    if pending {
+        Ok(())
+    } else {
+        Err(AppError::new(
+            "CDX-003",
+            "確認待ちのCodex提案が見つかりません。",
+            "提案一覧または履歴を更新し、もう一度選択してください。",
+        ))
+    }
+}
+
+fn mark_codex_history_accepted(
+    transaction: &Transaction<'_>,
+    request_id: &str,
+    article_id: &str,
+    decided_at: &str,
+) -> AppResult<()> {
+    let changed = transaction.execute(
+        "UPDATE codex_proposal_history SET status = 'accepted', decided_at = ?2, accepted_article_id = ?3 WHERE request_id = ?1 AND status = 'pending'",
+        params![request_id, decided_at, article_id],
+    )?;
+    if changed == 1 {
+        Ok(())
+    } else {
+        Err(AppError::database(
+            "Codex提案履歴の確定状態を更新できませんでした。",
+        ))
+    }
+}
+
+fn verify_codex_source_versions(
+    transaction: &Transaction<'_>,
+    sources: &[CodexSourceArticle],
+) -> AppResult<()> {
+    for source in sources {
+        let current: Option<(String, Option<String>)> = transaction
+            .query_row(
+                "SELECT updated_at, deleted_at FROM articles WHERE id = ?1",
+                [&source.article_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((updated_at, deleted_at)) = current else {
+            return Err(AppError::new(
+                "CDX-012",
+                "Codexへ委譲した元FAQが見つかりません。",
+                "現在のFAQを選び直して、新しい委譲番号で再依頼してください。",
+            ));
+        };
+        if deleted_at.is_some() || updated_at != source.source_updated_at {
+            return Err(AppError::new(
+                "CDX-012",
+                "Codexへの委譲後に元FAQが変更または削除されています。",
+                "古い提案の上書きを防ぐため反映を中止しました。現在のFAQから再度Codexへ依頼してください。",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn codex_history_not_found() -> AppError {
+    AppError::new(
+        "CDX-014",
+        "指定したCodex提案履歴が見つかりません。",
+        "履歴一覧を更新し、もう一度選択してください。",
+    )
+}
+
 fn article_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Article> {
     let body_doc_json: String = row.get(5)?;
     let body_doc = serde_json::from_str(&body_doc_json).map_err(|error| {
@@ -868,6 +1361,69 @@ fn article_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Article> {
         updated_badge_until: row.get(13)?,
         is_hidden: row.get(14)?,
         attachments: Vec::new(),
+    })
+}
+
+fn insert_category(
+    transaction: &Transaction<'_>,
+    id: &str,
+    name: &str,
+    description: &str,
+    parent_id: Option<&str>,
+) -> AppResult<Category> {
+    let name = validate_category_name(name)?;
+    let description = validate_category_description(description)?;
+    let depth = match parent_id {
+        Some(parent_id) => transaction
+            .query_row(
+                "SELECT depth + 1 FROM categories WHERE id = ?1",
+                [parent_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .ok_or_else(category_not_found)?,
+        None => 1,
+    };
+    if depth > 5 {
+        return Err(AppError::new(
+            "CAT-003",
+            "分類は5階層まで作成できます。",
+            "より上の階層を親として選択してください。",
+        ));
+    }
+
+    let normalized_name = normalize(name);
+    let duplicate: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM categories WHERE parent_id IS ?1 AND normalized_name = ?2)",
+        params![parent_id, normalized_name],
+        |row| row.get(0),
+    )?;
+    if duplicate {
+        return Err(AppError::new(
+            "CAT-004",
+            "同じ場所に同名の分類があります。",
+            "既存分類を選ぶか、別の分類名へ変更してください。",
+        ));
+    }
+
+    let sort_order: i64 = transaction.query_row(
+        "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM categories WHERE parent_id IS ?1",
+        [parent_id],
+        |row| row.get(0),
+    )?;
+    let now = Utc::now().to_rfc3339();
+    transaction.execute(
+        "INSERT INTO categories(id, parent_id, name, normalized_name, description, depth, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+        params![id, parent_id, name, normalized_name, description, depth, sort_order, now],
+    )?;
+    Ok(Category {
+        id: id.to_owned(),
+        parent_id: parent_id.map(str::to_owned),
+        name: name.to_owned(),
+        description: description.to_owned(),
+        depth,
+        sort_order,
+        article_count: 0,
     })
 }
 
@@ -908,6 +1464,18 @@ fn validate_category_name(name: &str) -> AppResult<&str> {
     Ok(name)
 }
 
+fn validate_category_description(description: &str) -> AppResult<&str> {
+    let description = description.trim();
+    if description.chars().count() > 500 {
+        return Err(AppError::new(
+            "CAT-001",
+            "分類の説明は500文字以内で入力してください。",
+            "説明を短くして、もう一度保存してください。",
+        ));
+    }
+    Ok(description)
+}
+
 fn category_not_found() -> AppError {
     AppError::new(
         "CAT-002",
@@ -935,6 +1503,27 @@ mod tests {
         (directory, database)
     }
 
+    fn record_pending_proposal(database: &Database, request_id: &str, body: &Value) {
+        database
+            .record_codex_proposal(&CodexFaqProposal {
+                format_version: 2,
+                request_id: request_id.to_owned(),
+                series_id: Some(request_id.to_owned()),
+                created_at: Utc::now().to_rfc3339(),
+                proposal_kind: CodexProposalKind::Create,
+                source_articles: vec![],
+                faq: crate::models::CodexFaqDraft {
+                    title: "テスト提案".into(),
+                    summary: String::new(),
+                    body_doc: body.clone(),
+                    importance: 1,
+                },
+                existing_category_candidates: vec![],
+                new_category_proposal: None,
+            })
+            .unwrap();
+    }
+
     #[test]
     fn opens_and_upgrades_a_version_one_database() {
         let directory = tempfile::tempdir().unwrap();
@@ -944,7 +1533,7 @@ mod tests {
         drop(connection);
 
         let database = Database::open(&path).unwrap();
-        assert_eq!(database.schema_version().unwrap(), 2);
+        assert_eq!(database.schema_version().unwrap(), 4);
         let columns: i64 = database
             .connection
             .query_row(
@@ -954,6 +1543,24 @@ mod tests {
             )
             .unwrap();
         assert_eq!(columns, 3);
+        let category_description_columns: i64 = database
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('categories') WHERE name = 'description'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(category_description_columns, 1);
+        let proposal_history_table: i64 = database
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'codex_proposal_history'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(proposal_history_table, 1);
     }
 
     #[test]
@@ -981,7 +1588,7 @@ mod tests {
         let mut target = Database::open(&target_path).unwrap();
         target.restore_from(&source_path).unwrap();
 
-        assert_eq!(target.schema_version().unwrap(), 2);
+        assert_eq!(target.schema_version().unwrap(), 4);
         let article = target.get_article("article").unwrap();
         assert_eq!(article.title, "旧FAQ");
         assert!(!article.is_hidden);
@@ -1162,6 +1769,251 @@ mod tests {
             .unwrap();
         assert_eq!(management.total, 1);
         assert!(management.items[0].is_hidden);
+    }
+
+    #[test]
+    fn codex_proposal_creates_draft_and_category_once_in_one_transaction() {
+        let (_directory, mut database) = temporary_database();
+        let parent = database
+            .create_category_with_description("PC", "PC全般", None)
+            .unwrap();
+        let request_id = Uuid::now_v7().to_string();
+        let article_id = Uuid::now_v7().to_string();
+        let category_id = Uuid::now_v7().to_string();
+        let body = json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"再起動します。"}]}]});
+        record_pending_proposal(&database, &request_id, &body);
+
+        let (article, created) = database
+            .accept_codex_proposal(CodexProposalArticleRecord {
+                request_id: &request_id,
+                proposal_kind: CodexProposalKind::Create,
+                source_articles: &[],
+                article_id: &article_id,
+                category_id: &category_id,
+                new_category: Some(NewCategoryRecord {
+                    id: &category_id,
+                    name: "Windows",
+                    description: "Windowsの操作",
+                    parent_id: Some(&parent.id),
+                }),
+                title: "Windowsを再起動するには？",
+                summary: "通常の再起動手順です。",
+                body_doc: &body,
+                body_plain_text: "再起動します。",
+                importance: 1,
+            })
+            .unwrap();
+        assert_eq!(article.status, "draft");
+        assert_eq!(article.category_id, category_id);
+        assert_eq!(created.unwrap().description, "Windowsの操作");
+        assert!(database.is_codex_proposal_accepted(&request_id).unwrap());
+
+        let duplicate_id = Uuid::now_v7().to_string();
+        let error = database
+            .accept_codex_proposal(CodexProposalArticleRecord {
+                request_id: &request_id,
+                proposal_kind: CodexProposalKind::Create,
+                source_articles: &[],
+                article_id: &duplicate_id,
+                category_id: &category_id,
+                new_category: None,
+                title: "重複",
+                summary: "",
+                body_doc: &body,
+                body_plain_text: "重複",
+                importance: 1,
+            })
+            .unwrap_err();
+        assert_eq!(error.code, "CDX-006");
+        assert!(database.get_article(&duplicate_id).is_err());
+    }
+
+    #[test]
+    fn codex_category_conflict_rolls_back_article_and_receipt() {
+        let (_directory, mut database) = temporary_database();
+        let parent = database.create_category("PC", None).unwrap();
+        database
+            .create_category("Windows", Some(&parent.id))
+            .unwrap();
+        let request_id = Uuid::now_v7().to_string();
+        let article_id = Uuid::now_v7().to_string();
+        let category_id = Uuid::now_v7().to_string();
+        let body = json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"回答"}]}]});
+        record_pending_proposal(&database, &request_id, &body);
+
+        let error = database
+            .accept_codex_proposal(CodexProposalArticleRecord {
+                request_id: &request_id,
+                proposal_kind: CodexProposalKind::Create,
+                source_articles: &[],
+                article_id: &article_id,
+                category_id: &category_id,
+                new_category: Some(NewCategoryRecord {
+                    id: &category_id,
+                    name: "Windows",
+                    description: "重複",
+                    parent_id: Some(&parent.id),
+                }),
+                title: "競合テスト",
+                summary: "",
+                body_doc: &body,
+                body_plain_text: "回答",
+                importance: 1,
+            })
+            .unwrap_err();
+        assert_eq!(error.code, "CAT-004");
+        assert!(database.get_article(&article_id).is_err());
+        assert!(!database.is_codex_proposal_accepted(&request_id).unwrap());
+        assert_eq!(database.list_categories().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn codex_revision_checks_source_version_and_preserves_article_state() {
+        let (_directory, mut database) = temporary_database();
+        let category = database.create_category("PC", None).unwrap();
+        let article_id = Uuid::now_v7().to_string();
+        let original_body = json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"元の回答"}]}]});
+        let original = database
+            .save_article(ArticleRecord {
+                id: &article_id,
+                is_new: true,
+                category_id: &category.id,
+                title: "元の質問",
+                summary: "元の概要",
+                body_doc: &original_body,
+                body_plain_text: "元の回答",
+                status: "published",
+                importance: 1,
+                new_badge_until: Some("2026-08-31"),
+                updated_badge_until: None,
+                is_hidden: true,
+                attachments: &[],
+            })
+            .unwrap();
+        let request_id = Uuid::now_v7().to_string();
+        let series_id = Uuid::now_v7().to_string();
+        let source = CodexSourceArticle {
+            article_id: article_id.clone(),
+            source_updated_at: original.updated_at.clone(),
+        };
+        let revised_body = json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"読みやすい回答"}]}]});
+        database
+            .record_codex_proposal(&CodexFaqProposal {
+                format_version: 2,
+                request_id: request_id.clone(),
+                series_id: Some(series_id),
+                created_at: Utc::now().to_rfc3339(),
+                proposal_kind: CodexProposalKind::Revise,
+                source_articles: vec![source.clone()],
+                faq: crate::models::CodexFaqDraft {
+                    title: "読みやすい質問".into(),
+                    summary: "読みやすい概要".into(),
+                    body_doc: revised_body.clone(),
+                    importance: 2,
+                },
+                existing_category_candidates: vec![],
+                new_category_proposal: None,
+            })
+            .unwrap();
+
+        let revised = database
+            .accept_codex_revision(CodexProposalRevisionRecord {
+                request_id: &request_id,
+                source_article: &source,
+                title: "読みやすい質問",
+                summary: "読みやすい概要",
+                body_doc: &revised_body,
+                body_plain_text: "読みやすい回答",
+                importance: 2,
+            })
+            .unwrap();
+        assert_eq!(revised.status, "published");
+        assert_eq!(revised.category_id, category.id);
+        assert!(revised.is_hidden);
+        assert_eq!(revised.new_badge_until.as_deref(), Some("2026-08-31"));
+        assert_eq!(revised.title, "読みやすい質問");
+
+        let stale_request = Uuid::now_v7().to_string();
+        let stale = CodexFaqProposal {
+            format_version: 2,
+            request_id: stale_request.clone(),
+            series_id: Some(Uuid::now_v7().to_string()),
+            created_at: Utc::now().to_rfc3339(),
+            proposal_kind: CodexProposalKind::Revise,
+            source_articles: vec![source.clone()],
+            faq: crate::models::CodexFaqDraft {
+                title: "古い案".into(),
+                summary: String::new(),
+                body_doc: revised_body.clone(),
+                importance: 1,
+            },
+            existing_category_candidates: vec![],
+            new_category_proposal: None,
+        };
+        database.record_codex_proposal(&stale).unwrap();
+        let error = database
+            .accept_codex_revision(CodexProposalRevisionRecord {
+                request_id: &stale_request,
+                source_article: &source,
+                title: "古い案",
+                summary: "",
+                body_doc: &revised_body,
+                body_plain_text: "古い案",
+                importance: 1,
+            })
+            .unwrap_err();
+        assert_eq!(error.code, "CDX-012");
+        assert_eq!(
+            database.get_article(&article_id).unwrap().title,
+            "読みやすい質問"
+        );
+    }
+
+    #[test]
+    fn codex_history_reopens_only_the_latest_rejected_proposal_in_a_series() {
+        let (_directory, mut database) = temporary_database();
+        let series_id = Uuid::now_v7().to_string();
+        let body = json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"回答"}]}]});
+        let mut request_ids = Vec::new();
+        for title in ["最初の案", "新しい案"] {
+            let request_id = Uuid::now_v7().to_string();
+            request_ids.push(request_id.clone());
+            database
+                .record_codex_proposal(&CodexFaqProposal {
+                    format_version: 2,
+                    request_id: request_id.clone(),
+                    series_id: Some(series_id.clone()),
+                    created_at: Utc::now().to_rfc3339(),
+                    proposal_kind: CodexProposalKind::Create,
+                    source_articles: vec![],
+                    faq: crate::models::CodexFaqDraft {
+                        title: title.into(),
+                        summary: String::new(),
+                        body_doc: body.clone(),
+                        importance: 1,
+                    },
+                    existing_category_candidates: vec![],
+                    new_category_proposal: None,
+                })
+                .unwrap();
+            database.reject_codex_proposal(&request_id).unwrap();
+        }
+
+        let history = database.list_codex_proposal_history().unwrap();
+        assert_eq!(history.len(), 2);
+        assert!(history[0].can_reopen);
+        assert!(!history[1].can_reopen);
+        assert_eq!(
+            database
+                .reopen_rejected_codex_proposal(&request_ids[0])
+                .unwrap_err()
+                .code,
+            "CDX-015"
+        );
+        database
+            .reopen_rejected_codex_proposal(&request_ids[1])
+            .unwrap();
+        assert_eq!(database.list_pending_codex_proposals().unwrap().len(), 1);
     }
 
     #[test]

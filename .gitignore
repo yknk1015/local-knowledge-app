@@ -33,6 +33,8 @@
 /safety-backups/
 /settings/local/
 /tmp/
+/codex-inbox/
+/codex-bridge/
 
 # Database files and journals
 *.db
@@ -46,6 +48,8 @@
 *.faqbackup
 *.faqbackup.*
 *.knowledge-export.json
+*.knowledge-proposal.json
+*.knowledge-delegation.json
 *.partial
 
 # Local planning source

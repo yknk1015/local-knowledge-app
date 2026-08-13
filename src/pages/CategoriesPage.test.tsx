@@ -15,9 +15,9 @@ vi.mock("../api/knowledgeApi", async (importOriginal) => {
 });
 
 const categories = [
-  { id: "root-a", parentId: null, name: "PC", depth: 1, sortOrder: 0, articleCount: 1 },
-  { id: "child", parentId: "root-a", name: "Windows", depth: 2, sortOrder: 0, articleCount: 0 },
-  { id: "root-b", parentId: null, name: "ネットワーク", depth: 1, sortOrder: 1, articleCount: 0 },
+  { id: "root-a", parentId: null, name: "PC", description: "PC全般", depth: 1, sortOrder: 0, articleCount: 1 },
+  { id: "child", parentId: "root-a", name: "Windows", description: "", depth: 2, sortOrder: 0, articleCount: 0 },
+  { id: "root-b", parentId: null, name: "ネットワーク", description: "", depth: 1, sortOrder: 1, articleCount: 0 },
 ];
 
 describe("CategoriesPage", () => {
@@ -43,7 +43,7 @@ describe("CategoriesPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "変更を保存" }));
 
     await waitFor(() => {
-      expect(mocks.updateCategory).toHaveBeenCalledWith("child", "Windows設定", "root-b");
+      expect(mocks.updateCategory).toHaveBeenCalledWith("child", "Windows設定", "", "root-b");
     });
   });
 

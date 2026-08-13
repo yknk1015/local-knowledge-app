@@ -21,7 +21,7 @@ use crate::{
 
 const BACKUP_FORMAT_VERSION: u32 = 1;
 const RICH_TEXT_FORMAT_VERSION: u32 = 1;
-const CURRENT_SCHEMA_VERSION: i64 = 2;
+const CURRENT_SCHEMA_VERSION: i64 = 4;
 const MAX_ARCHIVE_FILES: usize = 10_000;
 const MAX_UNCOMPRESSED_BYTES: u64 = 10 * 1024 * 1024 * 1024;
 
@@ -350,7 +350,7 @@ fn verify_archive(source: &Path) -> AppResult<BackupManifest> {
         .map_err(|_| backup_invalid_error("バックアップファイルを開けませんでした。"))?;
     let mut archive = ZipArchive::new(input)
         .map_err(|_| backup_invalid_error("バックアップファイルの形式が正しくありません。"))?;
-    if archive.len() == 0 || archive.len() > MAX_ARCHIVE_FILES + 1 {
+    if archive.is_empty() || archive.len() > MAX_ARCHIVE_FILES + 1 {
         return Err(backup_invalid_error(
             "バックアップ内のファイル数が正しくありません。",
         ));
@@ -720,7 +720,7 @@ fn archive_path(path: &Path) -> AppResult<String> {
             _ => None,
         })
         .collect::<Option<Vec<_>>>()
-        .ok_or_else(|| backup_read_error())?;
+        .ok_or_else(backup_read_error)?;
     if parts.is_empty() {
         return Err(backup_read_error());
     }
