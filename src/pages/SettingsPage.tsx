@@ -1,6 +1,7 @@
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useEffect, useRef, useState } from "react";
 import { knowledgeApi, toAppError } from "../api/knowledgeApi";
+import { useDisplaySettings } from "../app/ColorTheme";
 import { ErrorState, LoadingState } from "../components/Feedback";
 import type {
   AppError,
@@ -9,6 +10,7 @@ import type {
   BackupResult,
   RestoreResult,
   SystemInfo,
+  ColorTheme,
 } from "../types/domain";
 
 type BackupOperation = "creating" | "inspecting" | "restoring" | null;
@@ -35,6 +37,12 @@ function formatBytes(value: number) {
 }
 
 export function SettingsPage() {
+  const {
+    colorTheme,
+    showTopCategoryInTitle,
+    updateColorTheme,
+    updateShowTopCategoryInTitle,
+  } = useDisplaySettings();
   const [info, setInfo] = useState<SystemInfo | null>(null);
   const [overview, setOverview] = useState<BackupOverview | null>(null);
   const [infoError, setInfoError] = useState<AppError | null>(null);
@@ -43,7 +51,12 @@ export function SettingsPage() {
   const [preview, setPreview] = useState<BackupPreview | null>(null);
   const [backupResult, setBackupResult] = useState<BackupResult | null>(null);
   const [restoreResult, setRestoreResult] = useState<RestoreResult | null>(null);
+  const [themeError, setThemeError] = useState<AppError | null>(null);
+  const [themeSaving, setThemeSaving] = useState(false);
+  const [titleDisplayError, setTitleDisplayError] = useState<AppError | null>(null);
+  const [titleDisplaySaving, setTitleDisplaySaving] = useState(false);
   const feedbackRef = useRef<HTMLDivElement>(null);
+  const displaySettingsSaving = themeSaving || titleDisplaySaving;
 
   useEffect(() => {
     knowledgeApi.getSystemInfo().then(setInfo).catch((caught) => setInfoError(toAppError(caught)));
@@ -140,13 +153,134 @@ export function SettingsPage() {
 
   const busy = operation !== null;
 
+  const changeColorTheme = async (nextTheme: ColorTheme) => {
+    if (nextTheme === colorTheme || displaySettingsSaving) return;
+    setThemeError(null);
+    setThemeSaving(true);
+    try {
+      await updateColorTheme(nextTheme);
+    } catch (caught) {
+      setThemeError(toAppError(caught));
+    } finally {
+      setThemeSaving(false);
+    }
+  };
+
+  const changeTitleDisplay = async (enabled: boolean) => {
+    if (enabled === showTopCategoryInTitle || displaySettingsSaving) return;
+    setTitleDisplayError(null);
+    setTitleDisplaySaving(true);
+    try {
+      await updateShowTopCategoryInTitle(enabled);
+    } catch (caught) {
+      setTitleDisplayError(toAppError(caught));
+    } finally {
+      setTitleDisplaySaving(false);
+    }
+  };
+
   return (
     <div className="page settings-page">
       <div className="page-heading">
-        <span className="eyebrow">バックアップと端末情報</span>
+        <span className="eyebrow">表示・バックアップ・端末情報</span>
         <h1>設定・情報</h1>
-        <p>FAQ一式のバックアップ・復元と、データの保存状態を確認できます。</p>
+        <p>画面の配色と検索結果のタイトル表示を選び、FAQ一式のバックアップ・復元とデータの保存状態を確認できます。</p>
       </div>
+
+      <section className="panel appearance-panel" aria-labelledby="appearance-heading">
+        <div className="appearance-heading">
+          <div>
+            <span className="eyebrow">見やすい配色を選ぶ</span>
+            <h2 id="appearance-heading">画面の配色</h2>
+            <p>選んだ配色はすぐに全画面へ反映され、次回起動時も維持されます。</p>
+          </div>
+          <span className="theme-current" aria-live="polite">
+            {themeSaving ? "保存しています…" : `${colorTheme === "blue" ? "ブルー" : "グリーン"}を使用中`}
+          </span>
+        </div>
+
+        <fieldset className="theme-options" disabled={displaySettingsSaving}>
+          <legend className="sr-only">画面の配色を選択</legend>
+          <label className={`theme-option${colorTheme === "blue" ? " selected" : ""}`}>
+            <input
+              type="radio"
+              name="color-theme"
+              value="blue"
+              aria-label="ブルー"
+              checked={colorTheme === "blue"}
+              onChange={() => void changeColorTheme("blue")}
+            />
+            <span className="theme-preview blue-preview" aria-hidden="true">
+              <span className="theme-preview-sidebar"><i /><i /><i /></span>
+              <span className="theme-preview-content">
+                <i className="theme-preview-search" />
+                <span><i /><i /></span>
+              </span>
+            </span>
+            <span className="theme-option-copy">
+              <span className="theme-option-title">
+                <strong>ブルー</strong>
+                <small>おすすめ</small>
+              </span>
+              <span>鮮明な青で、選択中の項目や主要操作を見分けやすくします。</span>
+            </span>
+            <span className="theme-selection" aria-hidden="true">{colorTheme === "blue" ? "✓" : ""}</span>
+          </label>
+
+          <label className={`theme-option${colorTheme === "green" ? " selected" : ""}`}>
+            <input
+              type="radio"
+              name="color-theme"
+              value="green"
+              aria-label="グリーン"
+              checked={colorTheme === "green"}
+              onChange={() => void changeColorTheme("green")}
+            />
+            <span className="theme-preview green-preview" aria-hidden="true">
+              <span className="theme-preview-sidebar"><i /><i /><i /></span>
+              <span className="theme-preview-content">
+                <i className="theme-preview-search" />
+                <span><i /><i /></span>
+              </span>
+            </span>
+            <span className="theme-option-copy">
+              <span className="theme-option-title"><strong>グリーン</strong></span>
+              <span>従来の落ち着いた緑を使い、やわらかな印象で表示します。</span>
+            </span>
+            <span className="theme-selection" aria-hidden="true">{colorTheme === "green" ? "✓" : ""}</span>
+          </label>
+        </fieldset>
+
+        <p className="theme-note">公開・成功、注意、エラーなど意味を持つ色は、識別しやすさを保つため配色を変えても維持します。</p>
+        {themeError && <ErrorState error={themeError} />}
+
+        <div className="title-display-setting">
+          <div>
+            <span className="eyebrow">検索結果を見分けやすくする</span>
+            <h3>FAQタイトルの分類表示</h3>
+            <p>ONの場合、検索結果のタイトルを「【トップ分類名】質問文」の形式で表示します。保存済みタイトルは変更しないため、分類名の変更やFAQの移動にも自動で追従します。</p>
+          </div>
+          <label className="title-display-toggle">
+            <input
+              type="checkbox"
+              checked={showTopCategoryInTitle}
+              disabled={displaySettingsSaving}
+              onChange={(event) => void changeTitleDisplay(event.target.checked)}
+            />
+            <span>
+              <strong>トップ分類名を表示する</strong>
+              <small aria-live="polite">
+                {titleDisplaySaving
+                  ? "保存しています…"
+                  : showTopCategoryInTitle
+                    ? "現在はONです"
+                    : "現在はOFFです"}
+              </small>
+            </span>
+          </label>
+        </div>
+        {titleDisplayError && <ErrorState error={titleDisplayError} />}
+      </section>
 
       <section className="panel backup-panel" aria-labelledby="backup-heading">
         <div className="backup-intro">

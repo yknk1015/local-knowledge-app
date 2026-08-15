@@ -1,0 +1,15 @@
+* text=auto eol=lf
+
+# Binary assets must never receive text or line-ending conversion.
+*.bmp binary
+*.dll binary
+*.exe binary
+*.gif binary
+*.ico binary
+*.jpeg binary
+*.jpg binary
+*.lib binary
+*.pdb binary
+*.png binary
+*.webp binary
+*.zip binary

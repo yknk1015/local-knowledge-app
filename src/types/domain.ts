@@ -157,6 +157,13 @@ export interface SystemInfo {
   databasePath: string;
 }
 
+export type ColorTheme = "green" | "blue";
+
+export interface AppSettings {
+  colorTheme: ColorTheme;
+  showTopCategoryInTitle: boolean;
+}
+
 export interface BackupCounts {
   articles: number;
   categories: number;

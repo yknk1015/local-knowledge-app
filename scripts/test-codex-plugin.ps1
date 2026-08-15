@@ -4,6 +4,8 @@ param()
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $pluginScripts = Join-Path $repositoryRoot 'codex-plugins\knowledgeapp-faq\scripts'
+$skillPath = Join-Path $repositoryRoot 'codex-plugins\knowledgeapp-faq\skills\knowledgeapp-faq\SKILL.md'
+$proposalFormatPath = Join-Path $repositoryRoot 'codex-plugins\knowledgeapp-faq\skills\knowledgeapp-faq\references\proposal-format.md'
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('knowledgeapp-plugin-test-' + [Guid]::NewGuid().ToString())
 New-Item -ItemType Directory -Path (Join-Path $testRoot 'codex-bridge') -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $testRoot 'codex-bridge\delegations') -Force | Out-Null
@@ -15,6 +17,18 @@ if (-not $resolvedRoot.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCa
 }
 
 try {
+    $faqRuleText = [IO.File]::ReadAllText($skillPath) + [IO.File]::ReadAllText($proposalFormatPath)
+    foreach ($requiredText in @('画像・スクリーンショット', '著作権侵害', '挿入位置', '代替テキスト')) {
+        if ($faqRuleText.IndexOf($requiredText, [StringComparison]::Ordinal) -lt 0) {
+            throw ('FAQ画像利用ルールに必須文言がありません: ' + $requiredText)
+        }
+    }
+    foreach ($requiredText in @('【トップ分類名】', '接頭辞を含めない', '動的に付ける')) {
+        if ($faqRuleText.IndexOf($requiredText, [StringComparison]::Ordinal) -lt 0) {
+            throw ('FAQタイトル表示ルールに必須文言がありません: ' + $requiredText)
+        }
+    }
+
     $catalog = '{"formatVersion":1,"generatedAt":"2026-08-12T00:00:00Z","categories":[]}'
     [IO.File]::WriteAllText(
         (Join-Path $testRoot 'codex-bridge\categories.json'),
@@ -91,7 +105,14 @@ try {
     if (-not (Test-Path -LiteralPath $target -PathType Leaf)) {
         throw '提案送信コマンドのテストに失敗しました。'
     }
-    Write-Output 'OK: Codexプラグインの分類取得、委譲取得、提案送信を確認しました。'
+    $strictUtf8 = [Text.UTF8Encoding]::new($false, $true)
+    $proposalBytes = [IO.File]::ReadAllBytes($target)
+    $savedProposal = $strictUtf8.GetString($proposalBytes) | ConvertFrom-Json
+    if ($savedProposal.faq.title -ne '開発用テストFAQ' -or
+        $savedProposal.faq.bodyDoc.content[0].content[0].text -ne 'テスト回答') {
+        throw 'Codex提案の日本語UTF-8往復テストに失敗しました。'
+    }
+    Write-Output 'OK: Codexプラグインのタイトル・画像利用ルール、分類取得、委譲取得、提案送信を確認しました。'
 }
 finally {
     Remove-Item Env:\KNOWLEDGEAPP_PLUGIN_TEST_MODE -ErrorAction SilentlyContinue

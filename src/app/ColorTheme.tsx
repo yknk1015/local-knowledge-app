@@ -1,0 +1,105 @@
+import {
+  createContext,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { knowledgeApi } from "../api/knowledgeApi";
+import type { AppSettings, ColorTheme } from "../types/domain";
+
+interface ColorThemeContextValue {
+  colorTheme: ColorTheme;
+  showTopCategoryInTitle: boolean;
+  updateColorTheme: (nextTheme: ColorTheme) => Promise<void>;
+  updateShowTopCategoryInTitle: (enabled: boolean) => Promise<void>;
+}
+
+const ColorThemeContext = createContext<ColorThemeContextValue | null>(null);
+const DEFAULT_SETTINGS: AppSettings = {
+  colorTheme: "green",
+  showTopCategoryInTitle: true,
+};
+
+export function ColorThemeProvider({ children }: { children: ReactNode }) {
+  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const settingsRef = useRef(settings);
+  const hasUserUpdated = useRef(false);
+
+  useEffect(() => {
+    let active = true;
+    knowledgeApi.getSettings()
+      .then((loadedSettings) => {
+        if (active && !hasUserUpdated.current) {
+          settingsRef.current = loadedSettings;
+          setSettings(loadedSettings);
+        }
+      })
+      .catch(() => {
+        if (active && !hasUserUpdated.current) {
+          settingsRef.current = DEFAULT_SETTINGS;
+          setSettings(DEFAULT_SETTINGS);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    document.documentElement.dataset.colorTheme = settings.colorTheme;
+  }, [settings.colorTheme]);
+
+  const updateSettings = useCallback(async (updates: Partial<AppSettings>) => {
+    const previousSettings = settingsRef.current;
+    const nextSettings = { ...previousSettings, ...updates };
+    hasUserUpdated.current = true;
+    settingsRef.current = nextSettings;
+    setSettings(nextSettings);
+    try {
+      const savedSettings = await knowledgeApi.saveSettings(nextSettings);
+      settingsRef.current = savedSettings;
+      setSettings(savedSettings);
+    } catch (error) {
+      settingsRef.current = previousSettings;
+      setSettings(previousSettings);
+      throw error;
+    }
+  }, []);
+
+  const updateColorTheme = useCallback(
+    (nextTheme: ColorTheme) => updateSettings({ colorTheme: nextTheme }),
+    [updateSettings],
+  );
+
+  const updateShowTopCategoryInTitle = useCallback(
+    (enabled: boolean) => updateSettings({ showTopCategoryInTitle: enabled }),
+    [updateSettings],
+  );
+
+  const value = useMemo(
+    () => ({
+      colorTheme: settings.colorTheme,
+      showTopCategoryInTitle: settings.showTopCategoryInTitle,
+      updateColorTheme,
+      updateShowTopCategoryInTitle,
+    }),
+    [settings, updateColorTheme, updateShowTopCategoryInTitle],
+  );
+
+  return <ColorThemeContext.Provider value={value}>{children}</ColorThemeContext.Provider>;
+}
+
+export function useColorTheme() {
+  const value = useContext(ColorThemeContext);
+  if (!value) {
+    throw new Error("useColorThemeはColorThemeProvider内で使用してください。");
+  }
+  return value;
+}
+
+export const useDisplaySettings = useColorTheme;

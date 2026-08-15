@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AppSettings,
   AppError,
   Article,
   ArticleListItem,
@@ -60,6 +61,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 
 export const knowledgeApi = {
   getSystemInfo: () => call<SystemInfo>("get_system_info"),
+  getSettings: () => call<AppSettings>("get_settings"),
+  saveSettings: (input: AppSettings) => call<AppSettings>("save_settings", { input }),
   listCategories: () => call<Category[]>("list_categories"),
   createCategory: (name: string, description: string, parentId?: string) =>
     call<Category>("create_category", { input: { name, description, parentId: parentId || null } }),

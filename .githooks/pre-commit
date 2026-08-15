@@ -3,9 +3,10 @@
 repository_root="$(git rev-parse --show-toplevel)" || exit 1
 
 if command -v pwsh.exe >/dev/null 2>&1; then
+  pwsh.exe -NoProfile -File "$repository_root/scripts/check-text-encoding.ps1" -StagedOnly || exit 1
   pwsh.exe -NoProfile -File "$repository_root/scripts/check-no-runtime-data.ps1" -StagedOnly
 else
   export KNOWLEDGE_REPOSITORY_ROOT="$repository_root"
   powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \
-    '$scriptPath = Join-Path $env:KNOWLEDGE_REPOSITORY_ROOT "scripts/check-no-runtime-data.ps1"; $source = Get-Content -Raw -Encoding UTF8 -LiteralPath $scriptPath; & ([scriptblock]::Create($source)) -StagedOnly'
+    '$encodingPath = Join-Path $env:KNOWLEDGE_REPOSITORY_ROOT "scripts/check-text-encoding.ps1"; $encodingSource = Get-Content -Raw -Encoding UTF8 -LiteralPath $encodingPath; & ([scriptblock]::Create($encodingSource)) -StagedOnly; if (-not $?) { exit 1 }; $dataPath = Join-Path $env:KNOWLEDGE_REPOSITORY_ROOT "scripts/check-no-runtime-data.ps1"; $dataSource = Get-Content -Raw -Encoding UTF8 -LiteralPath $dataPath; & ([scriptblock]::Create($dataSource)) -StagedOnly'
 fi

@@ -315,6 +315,35 @@ pub struct SystemInfo {
     pub database_path: String,
 }
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ColorTheme {
+    #[default]
+    Green,
+    Blue,
+}
+
+fn default_show_top_category_in_title() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppSettings {
+    pub color_theme: ColorTheme,
+    #[serde(default = "default_show_top_category_in_title")]
+    pub show_top_category_in_title: bool,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            color_theme: ColorTheme::Green,
+            show_top_category_in_title: true,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateFullBackupInput {

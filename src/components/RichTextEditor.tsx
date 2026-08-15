@@ -1,10 +1,20 @@
 import { useEffect, useRef, useState } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, isTauri } from "@tauri-apps/api/core";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { mergeAttributes, Node, type Editor } from "@tiptap/core";
 import Image from "@tiptap/extension-image";
-import { EditorContent, useEditor, type JSONContent } from "@tiptap/react";
+import {
+  EditorContent,
+  NodeViewWrapper,
+  ReactNodeViewRenderer,
+  useEditor,
+  type JSONContent,
+  type NodeViewProps,
+} from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { TableKit } from "@tiptap/extension-table";
 import { knowledgeApi, toAppError } from "../api/knowledgeApi";
+import "./RichTextEditor.css";
 
 const EMPTY_DOCUMENT: JSONContent = {
   type: "doc",
@@ -37,6 +47,128 @@ const ManagedImage = Image.extend({
   HTMLAttributes: { class: "faq-inline-image" },
 });
 
+const MAX_COPY_BLOCK_LENGTH = 4_000;
+
+async function writePlainTextToClipboard(text: string): Promise<void> {
+  if (isTauri()) {
+    await writeText(text);
+    return;
+  }
+  if (!navigator.clipboard?.writeText) {
+    throw new Error("Clipboard API is unavailable");
+  }
+  await navigator.clipboard.writeText(text);
+}
+
+function CopyBlockNodeView({ editor, node, getPos, selected, updateAttributes }: NodeViewProps) {
+  const text = typeof node.attrs.text === "string" ? node.attrs.text : "";
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
+  const resetTimer = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (resetTimer.current !== null) window.clearTimeout(resetTimer.current);
+  }, []);
+
+  const showTemporaryState = (state: "copied" | "error") => {
+    setCopyState(state);
+    if (resetTimer.current !== null) window.clearTimeout(resetTimer.current);
+    resetTimer.current = window.setTimeout(() => setCopyState("idle"), 2_500);
+  };
+
+  const copy = async () => {
+    try {
+      await writePlainTextToClipboard(text);
+      showTemporaryState("copied");
+    } catch {
+      showTemporaryState("error");
+    }
+  };
+
+  const edit = () => {
+    const next = window.prompt("コピーする文字列を編集してください。", text);
+    if (next === null || next === text) return;
+    if (!next || Array.from(next).length > MAX_COPY_BLOCK_LENGTH) {
+      window.alert(`コピー用テキストは1～${MAX_COPY_BLOCK_LENGTH.toLocaleString("ja-JP")}文字で入力してください。`);
+      return;
+    }
+    updateAttributes({ text: next });
+  };
+
+  const restoreAsText = () => {
+    const position = getPos();
+    if (typeof position !== "number") return;
+    const paragraphs = text.split("\n").map((line) => ({
+      type: "paragraph",
+      content: line ? [{ type: "text", text: line }] : undefined,
+    }));
+    editor.chain().focus().setNodeSelection(position).insertContent(paragraphs).run();
+  };
+
+  return (
+    <NodeViewWrapper
+      className={`faq-copy-block${selected ? " selected" : ""}`}
+      data-copy-block=""
+      contentEditable={false}
+    >
+      <div className="copy-block-heading">
+        <span><span aria-hidden="true">▣</span> コピー用テキスト</span>
+        <div className="copy-block-actions">
+          {editor.isEditable && (
+            <>
+              <button type="button" className="copy-block-secondary" onClick={edit}>編集</button>
+              <button type="button" className="copy-block-secondary" onClick={restoreAsText}>通常の文章に戻す</button>
+            </>
+          )}
+          <button type="button" className="copy-block-button" onClick={() => void copy()}>
+            {copyState === "copied" ? "コピーしました" : "コピー"}
+          </button>
+        </div>
+      </div>
+      <code>{text}</code>
+      {copyState === "error" && (
+        <span className="copy-block-error" role="alert">
+          コピーできませんでした。文字列を選択してコピーしてください。
+        </span>
+      )}
+    </NodeViewWrapper>
+  );
+}
+
+export const CopyBlock = Node.create({
+  name: "copyBlock",
+  group: "block",
+  atom: true,
+  selectable: true,
+
+  addAttributes() {
+    return {
+      text: {
+        default: "",
+        parseHTML: (element) => element.getAttribute("data-copy-text") ?? "",
+      },
+    };
+  },
+
+  parseHTML() {
+    return [{ tag: "div[data-copy-block]" }];
+  },
+
+  renderHTML({ node, HTMLAttributes }) {
+    return [
+      "div",
+      mergeAttributes(HTMLAttributes, {
+        "data-copy-block": "",
+        "data-copy-text": node.attrs.text as string,
+      }),
+      ["code", node.attrs.text as string],
+    ];
+  },
+
+  addNodeView() {
+    return ReactNodeViewRenderer(CopyBlockNodeView);
+  },
+});
+
 const extensions = [
   StarterKit.configure({
     heading: { levels: [2, 3] },
@@ -55,7 +187,27 @@ const extensions = [
   }),
   TableKit.configure({ table: { resizable: true } }),
   ManagedImage,
+  CopyBlock,
 ];
+
+export function insertCopyBlockFromSelection(editor: Editor): boolean {
+  const { from, to, empty } = editor.state.selection;
+  const selectedText = editor.state.doc.textBetween(from, to, "\n", "\n");
+  if (empty || !selectedText) {
+    window.alert("コピー用にしたい文字列を先に選択してください。");
+    return false;
+  }
+  if (Array.from(selectedText).length > MAX_COPY_BLOCK_LENGTH) {
+    window.alert(`コピー用テキストは${MAX_COPY_BLOCK_LENGTH.toLocaleString("ja-JP")}文字以内にしてください。`);
+    return false;
+  }
+  return editor
+    .chain()
+    .focus()
+    .deleteSelection()
+    .insertContent({ type: "copyBlock", attrs: { text: selectedText } })
+    .run();
+}
 
 function transformImages(
   value: Record<string, unknown>,
@@ -224,23 +376,72 @@ export function RichTextEditor({
     if (next !== null) editor.chain().focus().updateAttributes("image", { alt: next }).run();
   };
 
+  const blockType = editor.isActive("heading", { level: 2 })
+    ? "heading2"
+    : editor.isActive("heading", { level: 3 })
+      ? "heading3"
+      : "paragraph";
+
+  const changeBlockType = (next: string) => {
+    if (next === "heading2") editor.chain().focus().setHeading({ level: 2 }).run();
+    else if (next === "heading3") editor.chain().focus().setHeading({ level: 3 }).run();
+    else editor.chain().focus().setParagraph().run();
+  };
+
   return (
     <div className="rich-editor">
       <div className="editor-toolbar" aria-label="回答の書式">
-        <button type="button" onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()} className={editor.isActive("heading", { level: 2 }) ? "active" : ""}>見出し</button>
-        <button type="button" onClick={() => editor.chain().focus().toggleBold().run()} className={editor.isActive("bold") ? "active" : ""}><strong>太字</strong></button>
-        <button type="button" onClick={() => editor.chain().focus().toggleItalic().run()} className={editor.isActive("italic") ? "active" : ""}><em>斜体</em></button>
-        <button type="button" onClick={() => editor.chain().focus().toggleBulletList().run()} className={editor.isActive("bulletList") ? "active" : ""}>箇条書き</button>
-        <button type="button" onClick={() => editor.chain().focus().toggleOrderedList().run()} className={editor.isActive("orderedList") ? "active" : ""}>番号付き</button>
-        <button type="button" onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}>表を追加</button>
-        <button type="button" onClick={() => void insertImage()} disabled={!onRequestImage}>画像を追加</button>
-        {editor.isActive("image") && <button type="button" onClick={editImageAlt}>画像の説明</button>}
-        {editor.isActive("image") && <button type="button" onClick={() => editor.chain().focus().deleteSelection().run()}>画像を削除</button>}
-        <button type="button" onClick={setLink} className={editor.isActive("link") ? "active" : ""}>参考URL</button>
-        <button type="button" onClick={() => editor.chain().focus().extendMarkRange("link").unsetLink().run()}>リンク解除</button>
-        <span className="toolbar-spacer" />
-        <button type="button" aria-label="元に戻す" onClick={() => editor.chain().focus().undo().run()} disabled={!editor.can().undo()}>↶</button>
-        <button type="button" aria-label="やり直す" onClick={() => editor.chain().focus().redo().run()} disabled={!editor.can().redo()}>↷</button>
+        <div className="toolbar-group">
+          <label className="sr-only" htmlFor="answer-block-type">段落の種類</label>
+          <select id="answer-block-type" value={blockType} onChange={(event) => changeBlockType(event.target.value)} disabled={disabled}>
+            <option value="paragraph">本文</option>
+            <option value="heading2">見出し2</option>
+            <option value="heading3">見出し3</option>
+          </select>
+          <button type="button" aria-label="太字" title="太字" aria-pressed={editor.isActive("bold")} onClick={() => editor.chain().focus().toggleBold().run()} className={editor.isActive("bold") ? "active" : ""} disabled={disabled}><strong>B</strong></button>
+          <button type="button" aria-label="斜体" title="斜体" aria-pressed={editor.isActive("italic")} onClick={() => editor.chain().focus().toggleItalic().run()} className={editor.isActive("italic") ? "active" : ""} disabled={disabled}><em>I</em></button>
+        </div>
+        <div className="toolbar-group">
+          <button type="button" aria-label="箇条書き" title="箇条書き" aria-pressed={editor.isActive("bulletList")} onClick={() => editor.chain().focus().toggleBulletList().run()} className={editor.isActive("bulletList") ? "active" : ""} disabled={disabled}><span aria-hidden="true">•☰</span></button>
+          <button type="button" aria-label="番号付きリスト" title="番号付きリスト" aria-pressed={editor.isActive("orderedList")} onClick={() => editor.chain().focus().toggleOrderedList().run()} className={editor.isActive("orderedList") ? "active" : ""} disabled={disabled}><span aria-hidden="true">1.☰</span></button>
+        </div>
+        <div className="toolbar-group">
+          <button type="button" className="wide-tool" onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()} disabled={disabled}><span aria-hidden="true">▦</span> 表</button>
+          {editor.isActive("table") && (
+            <>
+              <button type="button" aria-label="表の行を追加" title="選択位置の下に行を追加" onClick={() => editor.chain().focus().addRowAfter().run()} disabled={disabled}>＋行</button>
+              <button type="button" aria-label="表の列を追加" title="選択位置の右に列を追加" onClick={() => editor.chain().focus().addColumnAfter().run()} disabled={disabled}>＋列</button>
+              <button type="button" aria-label="表の行を削除" title="選択中の行を削除" onClick={() => editor.chain().focus().deleteRow().run()} disabled={disabled}>－行</button>
+              <button type="button" aria-label="表の列を削除" title="選択中の列を削除" onClick={() => editor.chain().focus().deleteColumn().run()} disabled={disabled}>－列</button>
+            </>
+          )}
+          <button type="button" className="wide-tool" onClick={() => void insertImage()} disabled={disabled || !onRequestImage}><span aria-hidden="true">▧</span> 画像</button>
+        </div>
+        <div className="toolbar-group">
+          <button type="button" className={`wide-tool${editor.isActive("link") ? " active" : ""}`} aria-pressed={editor.isActive("link")} onClick={setLink} disabled={disabled}><span aria-hidden="true">↗</span> 参考URL</button>
+          <button type="button" aria-label="リンク解除" title="表示文字を残してリンクを解除" onClick={() => editor.chain().focus().extendMarkRange("link").unsetLink().run()} disabled={disabled || !editor.isActive("link")}><span aria-hidden="true">×↗</span></button>
+        </div>
+        <div className="toolbar-group">
+          <button
+            type="button"
+            className="wide-tool"
+            title="選択したネットワークパスなどを、閲覧時にワンクリックでコピーできる枠へ変換します"
+            onClick={() => insertCopyBlockFromSelection(editor)}
+            disabled={disabled}
+          >
+            <span aria-hidden="true">▣</span> コピー用
+          </button>
+        </div>
+        {editor.isActive("image") && (
+          <div className="toolbar-group">
+            <button type="button" className="wide-tool" onClick={editImageAlt} disabled={disabled}>画像の説明</button>
+            <button type="button" className="wide-tool danger-tool" onClick={() => editor.chain().focus().deleteSelection().run()} disabled={disabled}>画像を削除</button>
+          </div>
+        )}
+        <div className="toolbar-group history">
+          <button type="button" aria-label="元に戻す" title="元に戻す" onClick={() => editor.chain().focus().undo().run()} disabled={disabled || !editor.can().undo()}>↶</button>
+          <button type="button" aria-label="やり直す" title="やり直す" onClick={() => editor.chain().focus().redo().run()} disabled={disabled || !editor.can().redo()}>↷</button>
+        </div>
       </div>
       <EditorContent editor={editor} />
     </div>

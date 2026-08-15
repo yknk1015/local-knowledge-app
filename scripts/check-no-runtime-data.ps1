@@ -6,7 +6,15 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$repositoryRoot = Split-Path -Parent $PSScriptRoot
+$repositoryRoot = if ($PSScriptRoot) {
+    Split-Path -Parent $PSScriptRoot
+}
+elseif ($env:KNOWLEDGE_REPOSITORY_ROOT) {
+    [IO.Path]::GetFullPath($env:KNOWLEDGE_REPOSITORY_ROOT)
+}
+else {
+    throw 'リポジトリの場所を取得できませんでした。'
+}
 $blockedRootNames = @(
     'data',
     'attachments',

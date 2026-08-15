@@ -3,14 +3,23 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   dehydrateManagedImages,
   hydrateManagedImages,
+  insertCopyBlockFromSelection,
   RichTextViewer,
   stripLinksFromPastedHtml,
 } from "./RichTextEditor";
 import { knowledgeApi } from "../api/knowledgeApi";
+import type { Editor } from "@tiptap/core";
+
+const writeTextMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@tauri-apps/api/core", () => ({
   convertFileSrc: (path: string) => `asset://localhost/${path}`,
+  isTauri: () => true,
   invoke: vi.fn(),
+}));
+
+vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({
+  writeText: writeTextMock,
 }));
 
 describe("stripLinksFromPastedHtml", () => {
@@ -57,8 +66,42 @@ describe("managed FAQ images", () => {
   });
 });
 
-describe("RichTextViewer", () => {
+describe("copy blocks", () => {
   afterEach(() => vi.restoreAllMocks());
+
+  it("turns the current text selection into one copy block without changing the text", () => {
+    const selectedText = String.raw`\\192.168.1.250\業務用フォルダ\古いファイル.xlsx`;
+    const insertContent = vi.fn();
+    const chain = {
+      focus: vi.fn(),
+      deleteSelection: vi.fn(),
+      insertContent,
+      run: vi.fn(() => true),
+    };
+    chain.focus.mockReturnValue(chain);
+    chain.deleteSelection.mockReturnValue(chain);
+    insertContent.mockReturnValue(chain);
+    const editor = {
+      state: {
+        selection: { from: 1, to: selectedText.length + 1, empty: false },
+        doc: { textBetween: vi.fn(() => selectedText) },
+      },
+      chain: vi.fn(() => chain),
+    } as unknown as Editor;
+
+    expect(insertCopyBlockFromSelection(editor)).toBe(true);
+    expect(insertContent).toHaveBeenCalledWith({
+      type: "copyBlock",
+      attrs: { text: selectedText },
+    });
+  });
+});
+
+describe("RichTextViewer", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    writeTextMock.mockReset();
+  });
 
   it("shows the destination before opening a reference URL in the default browser", async () => {
     const openExternalUrl = vi
@@ -91,5 +134,23 @@ describe("RichTextViewer", () => {
     expect(screen.getByText("https://example.com/")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "既定ブラウザーで開く" }));
     await waitFor(() => expect(openExternalUrl).toHaveBeenCalledWith("https://example.com/"));
+  });
+
+  it("copies copy-block text exactly without opening it", async () => {
+    const copyText = String.raw`\\192.168.1.250\業務用フォルダ\情報があり得ないほど詰まった古いファイル.xlsx`;
+    writeTextMock.mockResolvedValue(undefined);
+    render(
+      <RichTextViewer
+        value={{
+          type: "doc",
+          content: [{ type: "copyBlock", attrs: { text: copyText } }],
+        }}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "コピー" }));
+
+    await waitFor(() => expect(writeTextMock).toHaveBeenCalledWith(copyText));
+    expect(screen.getByRole("button", { name: "コピーしました" })).toBeVisible();
   });
 });

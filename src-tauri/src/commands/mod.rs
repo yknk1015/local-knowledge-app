@@ -12,7 +12,7 @@ use crate::{
     AppState,
     errors::{AppError, AppResult},
     models::{
-        AcceptCodexProposalInput, AcceptCodexProposalResult, Article, ArticleListItem,
+        AcceptCodexProposalInput, AcceptCodexProposalResult, AppSettings, Article, ArticleListItem,
         BackupOverview, BackupPreview, BackupResult, Category, CodexDelegationKind,
         CodexDelegationResult, CodexProposalInbox, CodexProposalKind, CreateCategoryInput,
         CreateCodexDelegationInput, CreateFullBackupInput, ManagementArticlePage,
@@ -41,6 +41,17 @@ pub fn get_system_info(state: State<'_, AppState>) -> SystemInfo {
         data_root: state.data_root.root().display().to_string(),
         database_path: state.data_root.database_path().display().to_string(),
     }
+}
+
+#[tauri::command]
+pub fn get_settings(state: State<'_, AppState>) -> AppResult<AppSettings> {
+    lock_database(&state)?.get_settings()
+}
+
+#[tauri::command]
+pub fn save_settings(input: AppSettings, state: State<'_, AppState>) -> AppResult<AppSettings> {
+    lock_database(&state)?.save_settings(&input)?;
+    Ok(input)
 }
 
 #[tauri::command]

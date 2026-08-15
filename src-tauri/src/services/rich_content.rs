@@ -20,6 +20,7 @@ const ALLOWED_NODES: &[&str] = &[
     "tableCell",
     "tableHeader",
     "image",
+    "copyBlock",
 ];
 
 const ALLOWED_MARKS: &[&str] = &["bold", "italic", "link"];
@@ -117,6 +118,9 @@ fn validate_node(
             }
             entry.insert(reference.alt_text);
         }
+    } else if node_type == "copyBlock" {
+        let copy_text = validate_copy_block(object)?;
+        plain_text.push_str(copy_text);
     } else {
         validate_attributes(node_type, object.get("attrs"))?;
     }
@@ -144,6 +148,27 @@ fn validate_node(
     }
 
     Ok(())
+}
+
+fn validate_copy_block(object: &Map<String, Value>) -> AppResult<&str> {
+    if object.get("content").is_some() || object.get("marks").is_some() {
+        return Err(invalid_document());
+    }
+    let attrs = object
+        .get("attrs")
+        .and_then(Value::as_object)
+        .ok_or_else(invalid_document)?;
+    if attrs.keys().any(|key| key != "text") {
+        return Err(invalid_document());
+    }
+    let text = attrs
+        .get("text")
+        .and_then(Value::as_str)
+        .ok_or_else(invalid_document)?;
+    if text.is_empty() || text.chars().count() > 4_000 || text.contains('\0') {
+        return Err(invalid_document());
+    }
+    Ok(text)
 }
 
 fn validate_image(attrs: Option<&Value>) -> AppResult<AttachmentReference> {
@@ -368,6 +393,37 @@ mod tests {
             validate_and_extract(&document).unwrap(),
             "javascript:alert(1) と file:///C:/manual.html"
         );
+    }
+
+    #[test]
+    fn accepts_copy_blocks_and_extracts_the_exact_text() {
+        let copy_text =
+            r"\\192.168.1.250\業務用フォルダ\情報があり得ないほど詰まった古いファイル.xlsx";
+        let document = json!({
+            "type": "doc",
+            "content": [{
+                "type": "copyBlock",
+                "attrs": {"text": copy_text}
+            }]
+        });
+
+        assert_eq!(validate_and_extract(&document).unwrap(), copy_text);
+    }
+
+    #[test]
+    fn rejects_copy_blocks_with_unknown_attributes_or_excessive_text() {
+        for document in [
+            json!({
+                "type": "doc",
+                "content": [{"type": "copyBlock", "attrs": {"text": "path", "onclick": "run"}}]
+            }),
+            json!({
+                "type": "doc",
+                "content": [{"type": "copyBlock", "attrs": {"text": "a".repeat(4_001)}}]
+            }),
+        ] {
+            assert_eq!(validate_and_extract(&document).unwrap_err().code, "ART-003");
+        }
     }
 
     #[test]

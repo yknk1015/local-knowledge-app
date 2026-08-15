@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { knowledgeApi, toAppError } from "../api/knowledgeApi";
 import { ErrorState, LoadingState } from "../components/Feedback";
 import { RichTextViewer } from "../components/RichTextEditor";
@@ -9,7 +9,13 @@ import type { AppError, Article, CodexDelegationResult } from "../types/domain";
 
 export function ArticleDetailPage() {
   const { articleId = "" } = useParams();
+  const location = useLocation();
   const navigate = useNavigate();
+  const locationState = location.state as { returnTo?: unknown } | null;
+  const returnTo = typeof locationState?.returnTo === "string"
+    && /^\/search(?:\?|$)/.test(locationState.returnTo)
+    ? locationState.returnTo
+    : "/search";
   const [article, setArticle] = useState<Article | null>(null);
   const [error, setError] = useState<AppError | null>(null);
   const [loading, setLoading] = useState(true);
@@ -113,7 +119,7 @@ export function ArticleDetailPage() {
   return (
     <article className="page article-detail">
       <div className="detail-actions">
-        <Link to="/search" className="text-link">← 一覧へ戻る</Link>
+        <Link to={returnTo} className="text-link">← 一覧へ戻る</Link>
         <div className="detail-action-buttons">
           <button type="button" className="button secondary" disabled={actionBusy} onClick={() => void delegateRevision()}>
             Codexに推敲・修正を依頼

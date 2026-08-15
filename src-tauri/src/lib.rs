@@ -17,6 +17,7 @@ pub struct AppState {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
@@ -37,6 +38,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_system_info,
+            commands::get_settings,
+            commands::save_settings,
             commands::list_categories,
             commands::create_category,
             commands::update_category,

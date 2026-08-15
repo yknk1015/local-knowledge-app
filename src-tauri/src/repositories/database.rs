@@ -9,9 +9,10 @@ use uuid::Uuid;
 use crate::{
     errors::{AppError, AppResult},
     models::{
-        Article, ArticleAttachment, ArticleListItem, BackupCounts, Category, CodexFaqProposal,
-        CodexProposalHistoryItem, CodexProposalKind, CodexSourceArticle, ManagementArticleListItem,
-        ManagementArticlePage, ManagementArticlesInput, SearchArticlesInput,
+        AppSettings, Article, ArticleAttachment, ArticleListItem, BackupCounts, Category,
+        CodexFaqProposal, CodexProposalHistoryItem, CodexProposalKind, CodexSourceArticle,
+        ManagementArticleListItem, ManagementArticlePage, ManagementArticlesInput,
+        SearchArticlesInput,
     },
 };
 
@@ -22,6 +23,7 @@ const CODEX_PROPOSALS_MIGRATION: &str = include_str!("../../migrations/0003_code
 const CODEX_DELEGATION_HISTORY_MIGRATION: &str =
     include_str!("../../migrations/0004_codex_delegation_history.sql");
 const CURRENT_SCHEMA_VERSION: i64 = 4;
+const APPEARANCE_SETTINGS_KEY: &str = "appearance";
 
 pub struct Database {
     connection: Connection,
@@ -251,6 +253,50 @@ impl Database {
                 "データベースの整合性確認に失敗しました。",
             ))
         }
+    }
+
+    pub fn get_settings(&self) -> AppResult<AppSettings> {
+        let stored: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT value_json FROM app_settings WHERE key = ?1",
+                [APPEARANCE_SETTINGS_KEY],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        let Some(stored) = stored else {
+            return Ok(AppSettings::default());
+        };
+
+        serde_json::from_str(&stored).map_err(|_| {
+            AppError::new(
+                "SET-001",
+                "画面の表示設定を読み込めませんでした。",
+                "設定画面で表示設定を選び直して保存してください。",
+            )
+        })
+    }
+
+    pub fn save_settings(&self, settings: &AppSettings) -> AppResult<()> {
+        let value_json = serde_json::to_string(settings).map_err(|_| {
+            AppError::new(
+                "SET-002",
+                "画面の表示設定を保存できませんでした。",
+                "設定内容を確認して、もう一度保存してください。",
+            )
+        })?;
+        self.connection.execute(
+            r#"
+            INSERT INTO app_settings(key, value_json, updated_at)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(key) DO UPDATE SET
+                value_json = excluded.value_json,
+                updated_at = excluded.updated_at
+            "#,
+            params![APPEARANCE_SETTINGS_KEY, value_json, Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
     }
 
     pub fn list_categories(&self) -> AppResult<Vec<Category>> {
@@ -524,7 +570,7 @@ impl Database {
                 r#"
                 UPDATE articles
                    SET category_id = ?2, title = ?3, normalized_title = ?4, summary = ?5,
-                       body_doc_json = ?6, body_plain_text = ?7, status = ?8,
+                       body_doc_json = ?6, body_format_version = 2, body_plain_text = ?7, status = ?8,
                        importance = ?9, new_badge_until = ?10, updated_badge_until = ?11,
                        is_hidden = ?12, updated_at = ?13
                  WHERE id = ?1 AND deleted_at IS NULL
@@ -555,7 +601,7 @@ impl Database {
                     id, category_id, title, normalized_title, summary, body_doc_json,
                     body_format_version, body_plain_text, status, importance, created_at, updated_at
                     , new_badge_until, updated_badge_until, is_hidden
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?8, ?9, ?10, ?10, ?11, ?12, ?13)
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 2, ?7, ?8, ?9, ?10, ?10, ?11, ?12, ?13)
                 "#,
                 params![
                     id,
@@ -892,7 +938,7 @@ impl Database {
                 id, category_id, title, normalized_title, summary, body_doc_json,
                 body_format_version, body_plain_text, status, importance, created_at, updated_at,
                 new_badge_until, updated_badge_until, is_hidden
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, 'draft', ?8, ?9, ?9, NULL, NULL, 0)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 2, ?7, 'draft', ?8, ?9, ?9, NULL, NULL, 0)
             "#,
             params![
                 record.article_id,
@@ -969,7 +1015,7 @@ impl Database {
             r#"
             UPDATE articles
                SET title = ?2, normalized_title = ?3, summary = ?4,
-                   body_doc_json = ?5, body_plain_text = ?6, importance = ?7,
+                   body_doc_json = ?5, body_format_version = 2, body_plain_text = ?6, importance = ?7,
                    updated_at = ?8
              WHERE id = ?1 AND deleted_at IS NULL
             "#,
@@ -1564,6 +1610,41 @@ mod tests {
     }
 
     #[test]
+    fn display_settings_default_to_green_with_category_titles_and_persist() {
+        let (_directory, database) = temporary_database();
+
+        assert_eq!(database.get_settings().unwrap(), AppSettings::default());
+
+        let settings = AppSettings {
+            color_theme: crate::models::ColorTheme::Blue,
+            show_top_category_in_title: false,
+        };
+        database.save_settings(&settings).unwrap();
+
+        assert_eq!(database.get_settings().unwrap(), settings);
+    }
+
+    #[test]
+    fn existing_appearance_settings_default_category_titles_to_visible() {
+        let (_directory, database) = temporary_database();
+        database
+            .connection
+            .execute(
+                "INSERT INTO app_settings(key, value_json, updated_at) VALUES (?1, ?2, ?3)",
+                params![
+                    APPEARANCE_SETTINGS_KEY,
+                    r#"{"colorTheme":"blue"}"#,
+                    "2026-08-15T00:00:00Z"
+                ],
+            )
+            .unwrap();
+
+        let settings = database.get_settings().unwrap();
+        assert_eq!(settings.color_theme, crate::models::ColorTheme::Blue);
+        assert!(settings.show_top_category_in_title);
+    }
+
+    #[test]
     fn restore_upgrades_a_version_one_snapshot_and_keeps_articles() {
         let directory = tempfile::tempdir().unwrap();
         let source_path = directory.path().join("version-one.db");
@@ -1700,6 +1781,15 @@ mod tests {
         assert_eq!(reopened.title, "画面が真っ暗");
         assert_eq!(reopened.new_badge_until.as_deref(), Some("2026-08-31"));
         assert_eq!(reopened.updated_badge_until.as_deref(), Some("2026-09-15"));
+        let body_format_version: i64 = database
+            .connection
+            .query_row(
+                "SELECT body_format_version FROM articles WHERE id = ?1",
+                [&draft.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(body_format_version, 2);
         let public_results = database
             .search_articles(&SearchArticlesInput {
                 query: "画面".into(),

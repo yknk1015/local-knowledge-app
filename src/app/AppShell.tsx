@@ -1,13 +1,32 @@
+import type { ReactNode } from "react";
 import { NavLink, Outlet } from "react-router-dom";
+import { FaqMascot } from "../components/FaqMascot";
 
-const navItems = [
-  { to: "/search", label: "FAQを探す", icon: "⌕" },
-  { to: "/articles/new", label: "新しいFAQ", icon: "+" },
-  { to: "/codex-proposals", label: "Codexからの提案", icon: "✦" },
-  { to: "/manage", label: "FAQの管理", icon: "☷" },
-  { to: "/categories", label: "分類の管理", icon: "▦" },
-  { to: "/settings", label: "設定・情報", icon: "⚙" },
+type IconName = "search" | "plus" | "sparkles" | "list" | "folder" | "settings" | "check" | "shield";
+
+const navItems: Array<{ to: string; label: string; icon: IconName }> = [
+  { to: "/search", label: "FAQを探す", icon: "search" },
+  { to: "/articles/new", label: "新しいFAQ", icon: "plus" },
+  { to: "/codex-proposals", label: "Codexからの提案", icon: "sparkles" },
+  { to: "/manage", label: "FAQの管理", icon: "list" },
+  { to: "/categories", label: "分類の管理", icon: "folder" },
+  { to: "/settings", label: "設定・情報", icon: "settings" },
 ];
+
+function AppIcon({ name }: { name: IconName }) {
+  const paths: Record<IconName, ReactNode> = {
+    search: <><circle cx="10.5" cy="10.5" r="6.5" /><path d="m15.5 15.5 4.5 4.5" /></>,
+    plus: <><path d="M12 5v14M5 12h14" /></>,
+    sparkles: <><path d="m12 3 1.2 3.3L16.5 7.5l-3.3 1.2L12 12l-1.2-3.3-3.3-1.2 3.3-1.2z" /><path d="m18 13 .8 2.2L21 16l-2.2.8L18 19l-.8-2.2L15 16l2.2-.8zM5 13l.7 1.8 1.8.7-1.8.7L5 18l-.7-1.8-1.8-.7 1.8-.7z" /></>,
+    list: <><path d="M8 6h12M8 12h12M8 18h12" /><circle cx="4" cy="6" r=".8" fill="currentColor" stroke="none" /><circle cx="4" cy="12" r=".8" fill="currentColor" stroke="none" /><circle cx="4" cy="18" r=".8" fill="currentColor" stroke="none" /></>,
+    folder: <path d="M3.5 7.5h6l2-2h9v13h-17z" />,
+    settings: <><circle cx="12" cy="12" r="3" /><path d="M19 12a7.6 7.6 0 0 0-.1-1l2-1.6-2-3.4-2.5 1a8 8 0 0 0-1.7-1L14.3 3h-4.1L9.8 6a8 8 0 0 0-1.7 1L5.6 6 3.5 9.4l2 1.6a7.6 7.6 0 0 0 0 2l-2 1.6L5.6 18l2.5-1a8 8 0 0 0 1.7 1l.4 3h4.1l.4-3a8 8 0 0 0 1.7-1l2.5 1 2-3.4-2-1.6a7.6 7.6 0 0 0 .1-1z" /></>,
+    check: <><circle cx="12" cy="12" r="8.5" /><path d="m8.5 12.2 2.2 2.2 4.8-5" /></>,
+    shield: <><path d="M12 3 19 6v5c0 4.4-2.7 7.8-7 10-4.3-2.2-7-5.6-7-10V6z" /><path d="m9 12 2 2 4-4" /></>,
+  };
+
+  return <svg viewBox="0 0 24 24" aria-hidden="true">{paths[name]}</svg>;
+}
 
 export function AppShell() {
   return (
@@ -21,25 +40,31 @@ export function AppShell() {
           </span>
         </NavLink>
         <div className="privacy-badge" title="FAQデータはこのPC内に保存されます">
-          <span aria-hidden="true">●</span> ローカル保存
+          <AppIcon name="check" />
+          ローカルに保存済み
         </div>
       </header>
 
       <div className="app-body">
         <nav className="side-nav" aria-label="メインメニュー">
-          {navItems.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}
-            >
-              <span className="nav-icon" aria-hidden="true">{item.icon}</span>
-              {item.label}
-            </NavLink>
-          ))}
+          <div className="side-nav-main">
+            {navItems.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}
+              >
+                <span className="nav-icon"><AppIcon name={item.icon} /></span>
+                <span>{item.label}</span>
+              </NavLink>
+            ))}
+          </div>
           <div className="side-note">
-            <strong>安全のために</strong>
-            <p>パスワードや秘密鍵、個人情報はFAQへ登録しないでください。</p>
+            <span className="side-note-icon" aria-hidden="true"><AppIcon name="shield" /></span>
+            <div>
+              <strong>安全のために</strong>
+              <p>パスワードや秘密鍵、個人情報はFAQへ登録しないでください。</p>
+            </div>
           </div>
         </nav>
 
@@ -47,6 +72,7 @@ export function AppShell() {
           <Outlet />
         </main>
       </div>
+      <FaqMascot />
     </div>
   );
 }

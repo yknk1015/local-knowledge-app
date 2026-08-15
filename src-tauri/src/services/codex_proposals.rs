@@ -624,9 +624,14 @@ mod tests {
         }];
         write_category_catalog(&root, &categories).unwrap();
         let catalog = fs::read_to_string(category_catalog_path(&root)).unwrap();
-        assert!(catalog.contains("PC全般"));
-        assert!(!catalog.contains("articleCount"));
-        assert!(!catalog.contains("99"));
+        let parsed: Value = serde_json::from_str(&catalog).unwrap();
+        let item = parsed["categories"][0].as_object().unwrap();
+        assert_eq!(item["description"], "PC全般");
+        assert_eq!(item.len(), 6);
+        for key in ["id", "parentId", "name", "description", "depth", "path"] {
+            assert!(item.contains_key(key));
+        }
+        assert!(!item.contains_key("articleCount"));
     }
 
     #[test]

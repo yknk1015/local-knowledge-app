@@ -21,6 +21,7 @@ Windows 11で利用する、一人用のローカルFAQ・ナレッジ管理ア�
 - 任意名・任意保存先のフルバックアップと復元
 - Codexによる新規FAQ下書き、既存FAQの推敲・修正、複数FAQの非破壊統合、分類提案、承認・却下履歴
 - Gitコミット前とGitHub Actionsでの利用者データ混入検査
+- ソース・設定・設計文書のUTF-8（BOMなし）・LF統一と自動検査
 
 タグ、同義語、高度な日本語検索、HTML手順書などは、今後の開発単位で追加します。
 
@@ -63,6 +64,7 @@ npm run tauri dev
 ```powershell
 npm test
 cargo test --manifest-path src-tauri/Cargo.toml
+./scripts/check-text-encoding.ps1
 ./scripts/check-no-runtime-data.ps1
 ./scripts/test-codex-plugin.ps1
 ```
