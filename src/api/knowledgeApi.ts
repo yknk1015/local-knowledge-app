@@ -20,6 +20,7 @@ import type {
   RestoreResult,
   StagedArticleImage,
   RelatedArticleCandidate,
+  TagMasterItem,
   SynonymGroup,
   SystemInfo,
   AuthenticatedUser,
@@ -171,6 +172,10 @@ export const knowledgeApi = {
     input: { id, displayName, terms, allowConflicts },
   }),
   deleteSynonymGroup: (id: string) => call<void>("delete_synonym_group", { id }),
+  listTags: () => call<TagMasterItem[]>("list_tags"),
+  saveTag: (id: string | undefined, name: string) =>
+    call<TagMasterItem>("save_tag", { input: { id, name } }),
+  deleteTag: (id: string) => call<void>("delete_tag", { id }),
   searchRelatedArticles: (articleId: string | undefined, query: string) =>
     call<RelatedArticleCandidate[]>("search_related_articles", {
       input: { articleId, query },

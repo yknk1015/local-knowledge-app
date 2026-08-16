@@ -23,9 +23,10 @@ use crate::{
         MarkCodexMergeSourcesResult, PasswordPolicySettings, RecordArticleViewInput,
         RecordSearchLogInput, RelatedArticleCandidate, ReorderCategoryInput,
         ResetUserPasswordInput, RestoreResult, SaveArticleInput, SaveSynonymGroupInput,
-        SearchArticlePage, SearchArticlesInput, SearchLogPage, SearchRelatedArticlesInput,
-        SetUserActiveInput, StageArticleImageBytesInput, StagedArticleImage, SynonymGroup,
-        SystemInfo, UpdateCategoryInput, UserRole, UserSummary, ViewLogPage,
+        SaveTagInput, SearchArticlePage, SearchArticlesInput, SearchLogPage,
+        SearchRelatedArticlesInput, SetUserActiveInput, StageArticleImageBytesInput,
+        StagedArticleImage, SynonymGroup, SystemInfo, TagMasterItem, UpdateCategoryInput, UserRole,
+        UserSummary, ViewLogPage,
     },
     repositories::database::{
         ArticleDetailsRecord, ArticleRecord, CodexProposalArticleRecord,
@@ -637,6 +638,24 @@ pub fn save_synonym_group(
 pub fn delete_synonym_group(id: String, state: State<'_, AppState>) -> AppResult<()> {
     require_user(&state)?;
     lock_database(&state)?.delete_synonym_group(&id)
+}
+
+#[tauri::command]
+pub fn list_tags(state: State<'_, AppState>) -> AppResult<Vec<TagMasterItem>> {
+    require_user(&state)?;
+    lock_database(&state)?.list_tags()
+}
+
+#[tauri::command]
+pub fn save_tag(input: SaveTagInput, state: State<'_, AppState>) -> AppResult<TagMasterItem> {
+    require_user(&state)?;
+    lock_database(&state)?.save_tag(input.id.as_deref(), &input.name)
+}
+
+#[tauri::command]
+pub fn delete_tag(id: String, state: State<'_, AppState>) -> AppResult<()> {
+    require_user(&state)?;
+    lock_database(&state)?.delete_tag(&id)
 }
 
 #[tauri::command]

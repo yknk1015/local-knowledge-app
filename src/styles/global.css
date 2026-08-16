@@ -443,6 +443,15 @@ input:focus, select:focus, textarea:focus { border-color: var(--green); box-shad
 .url-value { overflow-wrap: anywhere; color: var(--text-secondary); font-family: Consolas, "Yu Gothic UI", sans-serif; font-size: 12px; }
 .url-open-note { margin: 14px 0 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--text-secondary); background: var(--surface-soft); font-size: 13px; line-height: 1.6; }
 .url-open-error { margin: 14px 0 0; padding: 10px 12px; border-radius: 8px; color: var(--danger); background: #fff0ef; }
+.password-reset-dialog { width: min(520px, 100%); max-height: calc(100vh - 48px); overflow: auto; padding: 28px; border: 1px solid var(--line); border-radius: 16px; background: white; box-shadow: 0 22px 60px rgba(var(--shadow-rgb), .24); }
+.password-reset-dialog h2 { margin: 6px 0 8px; font-family: var(--font-serif); font-size: 24px; }
+.password-reset-dialog > p { margin: 0 0 18px; color: var(--text-secondary); font-size: 13px; line-height: 1.6; }
+.password-reset-dialog form { display: grid; gap: 14px; }
+.password-reset-dialog label { display: grid; gap: 6px; color: var(--text-secondary); font-size: 12px; font-weight: 800; }
+.password-reset-dialog input { width: 100%; min-height: 42px; padding: 9px 11px; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--text); background: white; font: inherit; }
+.password-reset-dialog input:focus-visible { border-color: var(--green); outline: 3px solid rgba(var(--primary-rgb), .24); outline-offset: 1px; }
+.password-reset-note { margin: -2px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.password-reset-error { display: grid; gap: 4px; padding: 11px 12px; border: 1px solid #f1b7b1; border-radius: 8px; color: var(--danger); background: #fff0ef; font-size: 12px; line-height: 1.5; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
 .detail-safety-note { display: flex; gap: 24px; margin-top: 18px; padding: 18px 22px; background: #fbf5e9; border: 1px solid #eddfc5; border-radius: 10px; }
 .detail-safety-note strong { color: var(--amber); white-space: nowrap; }

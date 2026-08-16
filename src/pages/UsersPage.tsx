@@ -16,6 +16,10 @@ export function UsersPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<AppError | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [passwordResetTarget, setPasswordResetTarget] = useState<UserSummary | null>(null);
+  const [newPassword, setNewPassword] = useState("");
+  const [newPasswordConfirmation, setNewPasswordConfirmation] = useState("");
+  const [passwordResetError, setPasswordResetError] = useState<AppError | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -58,28 +62,52 @@ export function UsersPage() {
     finally { setBusy(false); }
   };
 
-  const resetPassword = async (target: UserSummary) => {
-    const emptyPasswordGuide = allowEmptyPasswords
-      ? "\n空欄のまま確定すると、パスワードなしに設定します。"
-      : "";
-    const next = window.prompt(`${target.displayName}の新しいパスワードを入力してください。${emptyPasswordGuide}`, "");
-    if (next === null) return;
-    if (!allowEmptyPasswords && next === "") {
-      setNotice(null);
-      setError({
+  const openPasswordReset = (target: UserSummary) => {
+    setNotice(null);
+    setError(null);
+    setNewPassword("");
+    setNewPasswordConfirmation("");
+    setPasswordResetError(null);
+    setPasswordResetTarget(target);
+  };
+
+  const closePasswordReset = () => {
+    if (busy) return;
+    setPasswordResetTarget(null);
+    setNewPassword("");
+    setNewPasswordConfirmation("");
+    setPasswordResetError(null);
+  };
+
+  const resetPassword = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!passwordResetTarget) return;
+    if (!allowEmptyPasswords && newPassword === "") {
+      setPasswordResetError({
         code: "USR-004",
         message: "空欄のパスワードは現在許可されていません。",
         action: "1文字以上のパスワードを入力してください。",
       });
       return;
     }
-    if (!window.confirm(next === "" ? "パスワードを空欄に設定しますか？" : "入力したパスワードへ再設定しますか？")) return;
-    setBusy(true); setError(null); setNotice(null);
+    if (newPassword !== newPasswordConfirmation) {
+      setPasswordResetError({
+        code: "USR-001",
+        message: "確認用パスワードが一致しません。",
+        action: "同じパスワードを2つの入力欄へ入力してください。",
+      });
+      return;
+    }
+    setBusy(true); setPasswordResetError(null); setNotice(null);
     try {
-      await knowledgeApi.resetUserPassword(target.id, next);
-      setNotice(`${target.displayName}のパスワードを再設定しました。`);
+      await knowledgeApi.resetUserPassword(passwordResetTarget.id, newPassword);
+      const displayName = passwordResetTarget.displayName;
+      setPasswordResetTarget(null);
+      setNewPassword("");
+      setNewPasswordConfirmation("");
+      setNotice(`${displayName}のパスワードを再設定しました。`);
       await load();
-    } catch (caught) { setError(toAppError(caught)); }
+    } catch (caught) { setPasswordResetError(toAppError(caught)); }
     finally { setBusy(false); }
   };
 
@@ -113,12 +141,70 @@ export function UsersPage() {
                 <td><span className={`status-badge ${target.isActive ? "published" : "archived"}`}>{target.isActive ? "利用中" : "利用停止"}</span></td>
                 <td>{target.lastLoginAt ? new Date(target.lastLoginAt).toLocaleString("ja-JP") : "未ログイン"}</td>
                 <td className="management-row-actions">
-                  <button type="button" className="button secondary" disabled={busy} onClick={() => void resetPassword(target)}>パスワード再設定</button>
+                  <button type="button" className="button secondary" disabled={busy} onClick={() => openPasswordReset(target)}>パスワード再設定</button>
                   <button type="button" className={target.isActive ? "button danger-outline" : "button secondary"} disabled={busy || target.id === currentUser?.id} onClick={() => void toggleActive(target)}>{target.isActive ? "利用停止" : "利用再開"}</button>
                 </td>
               </tr>
             ))}</tbody>
           </table>
+        </div>
+      )}
+      {passwordResetTarget && (
+        <div className="modal-backdrop" role="presentation">
+          <section
+            className="password-reset-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="password-reset-title"
+          >
+            <span className="eyebrow">利用者の認証情報</span>
+            <h2 id="password-reset-title">{passwordResetTarget.displayName}のパスワード再設定</h2>
+            <p>入力間違いを防ぐため、新しいパスワードを2回入力してください。</p>
+            <form onSubmit={(event) => void resetPassword(event)}>
+              <label>
+                <span>新しいパスワード</span>
+                <input
+                  type="password"
+                  autoFocus
+                  required={!allowEmptyPasswords}
+                  maxLength={1024}
+                  autoComplete="new-password"
+                  value={newPassword}
+                  onChange={(event) => {
+                    setNewPassword(event.target.value);
+                    setPasswordResetError(null);
+                  }}
+                />
+              </label>
+              <label>
+                <span>新しいパスワード（確認）</span>
+                <input
+                  type="password"
+                  required={!allowEmptyPasswords}
+                  maxLength={1024}
+                  autoComplete="new-password"
+                  value={newPasswordConfirmation}
+                  onChange={(event) => {
+                    setNewPasswordConfirmation(event.target.value);
+                    setPasswordResetError(null);
+                  }}
+                />
+              </label>
+              {allowEmptyPasswords && (
+                <p className="password-reset-note">両方を空欄にして再設定すると、パスワードなしになります。</p>
+              )}
+              {passwordResetError && (
+                <div className="password-reset-error" role="alert">
+                  <strong>{passwordResetError.code}：{passwordResetError.message}</strong>
+                  <span>{passwordResetError.action}</span>
+                </div>
+              )}
+              <div className="dialog-actions">
+                <button type="button" className="button secondary" disabled={busy} onClick={closePasswordReset}>キャンセル</button>
+                <button type="submit" className="button primary" disabled={busy}>{busy ? "再設定中…" : "再設定する"}</button>
+              </div>
+            </form>
+          </section>
         </div>
       )}
     </div>

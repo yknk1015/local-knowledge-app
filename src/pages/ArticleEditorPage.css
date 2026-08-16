@@ -103,7 +103,7 @@
 
 .editor-steps {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   margin-bottom: 20px;
   overflow: hidden;
   background: rgba(255, 255, 255, .9);
@@ -422,6 +422,87 @@
   justify-content: flex-start !important;
   color: var(--muted);
   font-size: 11px;
+}
+
+.tag-selector > label {
+  display: block;
+  margin-bottom: 7px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.tag-selector-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 9px;
+}
+
+.tag-selector-entry .button {
+  min-width: 108px;
+}
+
+.selected-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.selected-tags li {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 6px 7px 6px 10px;
+  color: var(--green-dark);
+  background: var(--green-soft);
+  border: 1px solid var(--primary-border);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.selected-tags li span {
+  overflow-wrap: anywhere;
+}
+
+.selected-tags li button {
+  padding: 2px 6px;
+  color: var(--green-dark);
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.selected-tags li button:hover {
+  background: rgba(var(--primary-rgb), .12);
+}
+
+.tag-selector-empty {
+  margin: 13px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.tag-master-link-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.tag-master-link-row small {
+  color: var(--muted);
+  font-size: 10px;
 }
 
 .editor-field {

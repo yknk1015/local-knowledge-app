@@ -4,7 +4,7 @@ import { FaqMascot } from "../components/FaqMascot";
 import { useDisplaySettings } from "./ColorTheme";
 import { useAuth } from "./AuthContext";
 
-type IconName = "search" | "plus" | "sparkles" | "list" | "folder" | "settings" | "check" | "users" | "history";
+type IconName = "search" | "plus" | "sparkles" | "list" | "folder" | "tag" | "settings" | "check" | "users" | "history";
 
 const navItems: Array<{ to: string; label: string; icon: IconName }> = [
   { to: "/search", label: "FAQを探す", icon: "search" },
@@ -12,6 +12,7 @@ const navItems: Array<{ to: string; label: string; icon: IconName }> = [
   { to: "/codex-proposals", label: "Codexからの提案", icon: "sparkles" },
   { to: "/manage", label: "FAQの管理", icon: "list" },
   { to: "/categories", label: "分類の管理", icon: "folder" },
+  { to: "/tags", label: "タグマスター", icon: "tag" },
   { to: "/synonyms", label: "同義語の管理", icon: "sparkles" },
   { to: "/history", label: "検索・閲覧履歴", icon: "history" },
   { to: "/settings", label: "設定・情報", icon: "settings" },
@@ -24,6 +25,7 @@ function AppIcon({ name }: { name: IconName }) {
     sparkles: <><path d="m12 3 1.2 3.3L16.5 7.5l-3.3 1.2L12 12l-1.2-3.3-3.3-1.2 3.3-1.2z" /><path d="m18 13 .8 2.2L21 16l-2.2.8L18 19l-.8-2.2L15 16l2.2-.8zM5 13l.7 1.8 1.8.7-1.8.7L5 18l-.7-1.8-1.8-.7 1.8-.7z" /></>,
     list: <><path d="M8 6h12M8 12h12M8 18h12" /><circle cx="4" cy="6" r=".8" fill="currentColor" stroke="none" /><circle cx="4" cy="12" r=".8" fill="currentColor" stroke="none" /><circle cx="4" cy="18" r=".8" fill="currentColor" stroke="none" /></>,
     folder: <path d="M3.5 7.5h6l2-2h9v13h-17z" />,
+    tag: <><path d="M4 5h8.5L20 12.5 12.5 20 4 11.5z" /><circle cx="8.5" cy="9.5" r="1.2" /></>,
     settings: <><circle cx="12" cy="12" r="3" /><path d="M19 12a7.6 7.6 0 0 0-.1-1l2-1.6-2-3.4-2.5 1a8 8 0 0 0-1.7-1L14.3 3h-4.1L9.8 6a8 8 0 0 0-1.7 1L5.6 6 3.5 9.4l2 1.6a7.6 7.6 0 0 0 0 2l-2 1.6L5.6 18l2.5-1a8 8 0 0 0 1.7 1l.4 3h4.1l.4-3a8 8 0 0 0 1.7-1l2.5 1 2-3.4-2-1.6a7.6 7.6 0 0 0 .1-1z" /></>,
     check: <><circle cx="12" cy="12" r="8.5" /><path d="m8.5 12.2 2.2 2.2 4.8-5" /></>,
     users: <><circle cx="9" cy="8" r="3" /><path d="M3.5 19c.4-4 2.2-6 5.5-6s5.1 2 5.5 6M15 6.5a2.5 2.5 0 0 1 0 5M16 13c2.7.3 4.1 2.2 4.5 5" /></>,

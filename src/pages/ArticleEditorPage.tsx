@@ -9,15 +9,14 @@ import {
 } from "react-router-dom";
 import { knowledgeApi, toAppError } from "../api/knowledgeApi";
 import { ErrorState, LoadingState } from "../components/Feedback";
-import { MultiValueInput } from "../components/MultiValueInput";
 import { RichTextEditor, type ManagedImageSource } from "../components/RichTextEditor";
 import type {
   AppError,
   ArticleStatus,
   Category,
   CodexMergePublicationContext,
-  RelatedArticleCandidate,
   RelatedArticleSummary,
+  TagMasterItem,
 } from "../types/domain";
 import "./ArticleEditorPage.css";
 
@@ -70,6 +69,7 @@ export function ArticleEditorPage() {
   const navigate = useNavigate();
   const isEditing = Boolean(articleId);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [tagMaster, setTagMaster] = useState<TagMasterItem[]>([]);
   const [title, setTitle] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [summary, setSummary] = useState("");
@@ -91,10 +91,9 @@ export function ArticleEditorPage() {
   const [procedures, setProcedures] = useState<string[]>([]);
   const [cautions, setCautions] = useState<string[]>([]);
   const [tags, setTags] = useState<string[]>([]);
+  const [tagToAdd, setTagToAdd] = useState("");
   const [searchTerms, setSearchTerms] = useState<string[]>([]);
   const [relatedArticles, setRelatedArticles] = useState<RelatedArticleSummary[]>([]);
-  const [relationQuery, setRelationQuery] = useState("");
-  const [relationCandidates, setRelationCandidates] = useState<RelatedArticleCandidate[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadedRouteKey, setLoadedRouteKey] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -122,9 +121,13 @@ export function ArticleEditorPage() {
       initialEditorFingerprintRef.current = null;
       allowNavigationRef.current = false;
       try {
-        const categoryItems = await knowledgeApi.listCategories();
+        const [categoryItems, tagItems] = await Promise.all([
+          knowledgeApi.listCategories(),
+          knowledgeApi.listTags(),
+        ]);
         if (!active) return;
         setCategories(categoryItems);
+        setTagMaster(tagItems);
         if (!articleId) {
           setCategoryId("");
           return;
@@ -183,24 +186,6 @@ export function ArticleEditorPage() {
     void load();
     return () => { active = false; };
   }, [articleId, routeKey]);
-
-  useEffect(() => {
-    if (loading || !relationQuery.trim()) {
-      setRelationCandidates([]);
-      return;
-    }
-    let active = true;
-    const timer = window.setTimeout(() => {
-      void knowledgeApi.searchRelatedArticles(articleId, relationQuery).then(
-        (items) => { if (active) setRelationCandidates(items); },
-        (caught) => { if (active) setError(toAppError(caught)); },
-      );
-    }, 150);
-    return () => {
-      active = false;
-      window.clearTimeout(timer);
-    };
-  }, [articleId, loading, relationQuery]);
 
   useEffect(() => {
     if (!error && validation.length === 0) return;
@@ -296,6 +281,7 @@ export function ArticleEditorPage() {
     && (!updatedBadgeEnabled || Boolean(updatedBadgeUntil))
     && (!isInitialMergePublication || (newBadgeEnabled && Boolean(newBadgeUntil)));
   const currentStateReady = basicSectionComplete && (status !== "published" || hasAnswer) && displaySectionComplete;
+  const availableTags = tagMaster.filter((tag) => !tags.includes(tag.name));
   const clearValidation = (...messages: string[]) => {
     setValidation((current) => current.filter((message) => !messages.includes(message)));
   };
@@ -438,7 +424,7 @@ export function ArticleEditorPage() {
   };
 
   if (loading) return <div className="page"><LoadingState label="編集画面を準備しています…" /></div>;
-  if (error && isEditing && !title) return <div className="page"><ErrorState error={error} /></div>;
+  if (error && !title && categories.length === 0) return <div className="page"><ErrorState error={error} /></div>;
 
   if (categories.length === 0) {
     return (
@@ -479,20 +465,16 @@ export function ArticleEditorPage() {
           <span className="step-mark">{basicSectionComplete ? "✓" : "1"}</span>
           <span><strong>基本情報</strong><small>質問・分類・概要</small></span>
         </button>
-        <button type="button" className="complete" onClick={() => document.getElementById("editor-search-info")?.scrollIntoView({ behavior: "smooth", block: "start" })}>
-          <span className="step-mark">2</span>
-          <span><strong>検索情報</strong><small>症状・タグ・検索用語</small></span>
-        </button>
         <button type="button" className={hasAnswer ? "complete" : ""} onClick={() => document.getElementById("editor-answer")?.scrollIntoView({ behavior: "smooth", block: "start" })}>
-          <span className="step-mark">{hasAnswer ? "✓" : "3"}</span>
+          <span className="step-mark">{hasAnswer ? "✓" : "2"}</span>
           <span><strong>回答</strong><small>手順・画像・外部資料</small></span>
         </button>
-        <button type="button" className="complete" onClick={() => document.getElementById("editor-relations")?.scrollIntoView({ behavior: "smooth", block: "start" })}>
-          <span className="step-mark">4</span>
-          <span><strong>関連情報</strong><small>関連FAQ</small></span>
+        <button type="button" className="complete" onClick={() => document.getElementById("editor-tags")?.scrollIntoView({ behavior: "smooth", block: "start" })}>
+          <span className="step-mark">3</span>
+          <span><strong>タグ</strong><small>タグマスターから選択</small></span>
         </button>
         <button type="button" className={displaySectionComplete ? "complete" : ""} onClick={() => document.getElementById("editor-display")?.scrollIntoView({ behavior: "smooth", block: "start" })}>
-          <span className="step-mark">{displaySectionComplete ? "✓" : "5"}</span>
+          <span className="step-mark">{displaySectionComplete ? "✓" : "4"}</span>
           <span><strong>公開・表示設定</strong><small>{selectedStatus.label}として保存</small></span>
         </button>
       </nav>
@@ -622,29 +604,9 @@ export function ArticleEditorPage() {
           </div>
         </section>
 
-        <section id="editor-search-info" className="editor-section-card" aria-labelledby="editor-search-info-title">
-          <div className="editor-section-heading">
-            <span className="section-number">2</span>
-            <div>
-              <h2 id="editor-search-info-title">検索情報</h2>
-              <p>利用者が入力しそうな症状や言い換えを追加すると、質問文と表現が違っても見つけやすくなります。各項目は任意です。</p>
-            </div>
-          </div>
-          <div className="editor-section-body multi-value-grid">
-            <MultiValueInput label="症状" description="利用者が目にする状態" values={symptoms} onChange={setSymptoms} placeholder="例：画面が真っ暗になる" />
-            <MultiValueInput label="想定原因" description="問題の原因として考えられる内容" values={causes} onChange={setCauses} placeholder="例：表示先が別画面になっている" />
-            <MultiValueInput label="対象OS・製品・機種" description="このFAQが当てはまる環境" values={targets} onChange={setTargets} placeholder="例：Windows 11" />
-            <MultiValueInput label="エラーコード" description="画面に表示される識別番号" values={errorCodes} onChange={setErrorCodes} placeholder="例：0x80070005" maximumLength={100} />
-            <MultiValueInput label="対応手順" description="検索・詳細表示用の短い操作" values={procedures} onChange={setProcedures} placeholder="例：Windowsキーを押す" maximumLength={500} />
-            <MultiValueInput label="注意事項" description="作業前後に確認すること" values={cautions} onChange={setCautions} placeholder="例：未保存のファイルを閉じる" maximumLength={500} />
-            <MultiValueInput label="タグ" description="複数の観点を表す短い名前" values={tags} onChange={setTags} placeholder="例：ディスプレイ" maximumLength={100} />
-            <MultiValueInput label="検索用語" description="FAQ固有の言い換えや別名" values={searchTerms} onChange={setSearchTerms} placeholder="例：ブラックスクリーン" />
-          </div>
-        </section>
-
         <section id="editor-answer" className="editor-section-card" aria-labelledby="editor-answer-title">
           <div className="editor-section-heading">
-            <span className="section-number">3</span>
+            <span className="section-number">2</span>
             <div>
               <h2 id="editor-answer-title">回答</h2>
               <p>最初に結論を簡潔に示し、その後に手順や詳細を記載すると、読み手に伝わりやすくなります。</p>
@@ -672,70 +634,53 @@ export function ArticleEditorPage() {
           </div>
         </section>
 
-        <section id="editor-relations" className="editor-section-card" aria-labelledby="editor-relations-title">
+        <section id="editor-tags" className="editor-section-card" aria-labelledby="editor-tags-title">
           <div className="editor-section-heading">
-            <span className="section-number">4</span>
+            <span className="section-number">3</span>
             <div>
-              <h2 id="editor-relations-title">関連情報</h2>
-              <p>あわせて確認すると役立つFAQを選びます。保存すると、どちらのFAQ詳細からも移動できます。</p>
+              <h2 id="editor-tags-title">タグ</h2>
+              <p>タグマスターから選択し、分類とは別の観点でFAQを関連付けます。複数選択できます。</p>
             </div>
           </div>
-          <div className="editor-section-body relation-editor">
-            {relatedArticles.length > 0 && (
-              <ul className="selected-relations" aria-label="選択中の関連FAQ">
-                {relatedArticles.map((related) => (
-                  <li key={related.id}>
-                    <span>
-                      <strong>{related.title}</strong>
-                      <small>{related.deletedAt ? "削除済み（関係は保持されます）" : related.isMerged ? "統合済み" : related.status === "published" ? "公開" : related.status === "draft" ? "下書き" : "廃止"}</small>
-                    </span>
-                    <button type="button" onClick={() => setRelatedArticles((current) => current.filter((item) => item.id !== related.id))}>関連を外す</button>
-                  </li>
+          <div className="editor-section-body tag-selector">
+            <label htmlFor="faq-tag-select">タグマスターから選択</label>
+            <div className="tag-selector-entry">
+              <select id="faq-tag-select" value={tagToAdd} onChange={(event) => setTagToAdd(event.target.value)}>
+                <option value="">タグを選択してください</option>
+                {availableTags.map((tag) => <option key={tag.id} value={tag.name}>{tag.name}</option>)}
+              </select>
+              <button
+                type="button"
+                className="button secondary"
+                disabled={!tagToAdd}
+                onClick={() => {
+                  if (!tagToAdd || tags.includes(tagToAdd)) return;
+                  setTags((current) => [...current, tagToAdd]);
+                  setTagToAdd("");
+                }}
+              >
+                タグを追加
+              </button>
+            </div>
+            {tags.length > 0 ? (
+              <ul className="selected-tags" aria-label="選択中のタグ">
+                {tags.map((tag) => (
+                  <li key={tag}><span>{tag}</span><button type="button" aria-label={`${tag}を外す`} onClick={() => setTags((current) => current.filter((item) => item !== tag))}>外す</button></li>
                 ))}
               </ul>
+            ) : (
+              <p className="tag-selector-empty">タグは未選択です。必要な場合だけ追加してください。</p>
             )}
-            <label htmlFor="related-article-search">関連FAQを検索</label>
-            <input
-              id="related-article-search"
-              type="search"
-              value={relationQuery}
-              maxLength={200}
-              placeholder="FAQタイトルを入力してください"
-              onChange={(event) => setRelationQuery(event.target.value)}
-            />
-            {relationQuery.trim() && (
-              <ul className="relation-candidates" aria-label="関連FAQの検索結果">
-                {relationCandidates.map((candidate) => {
-                  const selected = relatedArticles.some((related) => related.id === candidate.id);
-                  return (
-                    <li key={candidate.id}>
-                      <span><strong>{candidate.title}</strong><small>{candidate.status === "published" ? "公開" : candidate.status === "draft" ? "下書き" : "廃止"}</small></span>
-                      <button
-                        type="button"
-                        className="button secondary"
-                        disabled={selected}
-                        onClick={() => setRelatedArticles((current) => [...current, {
-                          id: candidate.id,
-                          title: candidate.title,
-                          status: candidate.status,
-                          deletedAt: null,
-                          isMerged: false,
-                        }])}
-                      >
-                        {selected ? "選択済み" : "関連に追加"}
-                      </button>
-                    </li>
-                  );
-                })}
-                {relationCandidates.length === 0 && <li className="relation-empty">一致するFAQはありません。</li>}
-              </ul>
-            )}
+            <div className="tag-master-link-row">
+              <small>選択肢にないタグは、先にタグマスターへ登録します。</small>
+              <Link to="/tags" className="button secondary compact">タグマスターを管理</Link>
+            </div>
           </div>
         </section>
 
         <section id="editor-display" className="editor-section-card" aria-labelledby="editor-display-title">
           <div className="editor-section-heading">
-            <span className="section-number">5</span>
+            <span className="section-number">4</span>
             <div>
               <h2 id="editor-display-title">公開・表示設定</h2>
               <p>保存後に誰が見つけられるかと、検索結果に付ける目印を設定します。</p>

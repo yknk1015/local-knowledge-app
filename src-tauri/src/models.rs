@@ -365,6 +365,22 @@ pub struct RelatedArticleCandidate {
     pub is_related: bool,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TagMasterItem {
+    pub id: String,
+    pub name: String,
+    pub usage_count: i64,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveTagInput {
+    pub id: Option<String>,
+    pub name: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArticleMergeInfo {

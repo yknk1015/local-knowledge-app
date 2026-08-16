@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { knowledgeApi } from "../api/knowledgeApi";
 import { ArticleEditorPage, getDefaultBadgeUntil } from "./ArticleEditorPage";
 
@@ -14,11 +14,16 @@ function renderEditor(initialEntry = "/articles/new") {
     { path: "/articles/:articleId/edit", element: <ArticleEditorPage /> },
     { path: "/articles/:articleId", element: <div>保存完了</div> },
     { path: "/search", element: <div>検索画面</div> },
+    { path: "/tags", element: <div>タグマスター</div> },
   ], { initialEntries: [initialEntry] });
   return { ...render(<RouterProvider router={router} />), router };
 }
 
 describe("ArticleEditorPage", () => {
+  beforeEach(() => {
+    vi.spyOn(knowledgeApi, "listTags").mockResolvedValue([]);
+  });
+
   afterEach(() => vi.restoreAllMocks());
 
   it("calculates the default display end date using the local calendar", () => {
@@ -226,12 +231,13 @@ describe("ArticleEditorPage", () => {
     })));
   });
 
-  it("saves multiple search values and a selected related FAQ", async () => {
+  it("removes search and related FAQ inputs and saves tags selected from the master", async () => {
     vi.spyOn(knowledgeApi, "listCategories").mockResolvedValue([
       { id: "category-1", parentId: null, name: "操作全般", description: "", depth: 1, sortOrder: 0, articleCount: 0 },
     ]);
-    vi.spyOn(knowledgeApi, "searchRelatedArticles").mockResolvedValue([
-      { id: "related-1", title: "ネットワークを確認するには？", status: "published", isRelated: false },
+    vi.mocked(knowledgeApi.listTags).mockResolvedValue([
+      { id: "tag-1", name: "ディスプレイ", usageCount: 3, updatedAt: "2026-08-16T00:00:00Z" },
+      { id: "tag-2", name: "Windows 11", usageCount: 5, updatedAt: "2026-08-16T00:00:00Z" },
     ]);
     const save = vi.spyOn(knowledgeApi, "saveArticle").mockRejectedValue({
       code: "TEST-001",
@@ -242,15 +248,71 @@ describe("ArticleEditorPage", () => {
 
     fireEvent.change(await screen.findByLabelText(/タイトル/), { target: { value: "画面が暗いときは？" } });
     fireEvent.change(screen.getByLabelText(/所属分類/), { target: { value: "category-1" } });
-    const symptomInput = screen.getByLabelText("症状");
-    fireEvent.change(symptomInput, { target: { value: "画面が真っ暗" } });
-    fireEvent.keyDown(symptomInput, { key: "Enter" });
-    fireEvent.change(screen.getByLabelText("関連FAQを検索"), { target: { value: "ネットワーク" } });
-    fireEvent.click(await screen.findByRole("button", { name: "関連に追加" }));
+    expect(screen.queryByRole("heading", { name: "検索情報" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("症状")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("関連FAQを検索")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("タグマスターから選択"), { target: { value: "ディスプレイ" } });
+    fireEvent.click(screen.getByRole("button", { name: "タグを追加" }));
+    expect(screen.getByRole("list", { name: "選択中のタグ" })).toHaveTextContent("ディスプレイ");
     fireEvent.click(screen.getByRole("button", { name: "下書きを保存" }));
 
     await waitFor(() => expect(save).toHaveBeenCalledWith(expect.objectContaining({
-      symptoms: ["画面が真っ暗"],
+      symptoms: [],
+      tags: ["ディスプレイ"],
+      relatedArticleIds: [],
+    })));
+  });
+
+  it("preserves hidden legacy search values and related FAQ links when editing", async () => {
+    const category = { id: "category-1", parentId: null, name: "操作全般", description: "", depth: 1, sortOrder: 0, articleCount: 1 };
+    const article = {
+      id: "article-1",
+      categoryId: category.id,
+      categoryName: category.name,
+      title: "既存FAQ",
+      summary: "既存の概要",
+      bodyDoc: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "回答" }] }] },
+      bodyPlainText: "回答",
+      status: "draft" as const,
+      importance: 1,
+      newBadgeUntil: null,
+      updatedBadgeUntil: null,
+      isHidden: false,
+      createdAt: "2026-08-15T00:00:00Z",
+      updatedAt: "2026-08-15T00:00:00Z",
+      deletedAt: null,
+      mergeInfo: null,
+      attachments: [],
+      symptoms: ["画面が暗い"],
+      causes: ["表示設定"],
+      targets: ["Windows 11"],
+      errorCodes: ["E001"],
+      procedures: ["表示先を確認"],
+      cautions: ["作業中のファイルを保存"],
+      tags: ["ディスプレイ"],
+      searchTerms: ["ブラックスクリーン"],
+      relatedArticles: [{ id: "related-1", title: "関連FAQ", status: "published" as const, deletedAt: null, isMerged: false }],
+    };
+    vi.spyOn(knowledgeApi, "listCategories").mockResolvedValue([category]);
+    vi.mocked(knowledgeApi.listTags).mockResolvedValue([
+      { id: "tag-1", name: "ディスプレイ", usageCount: 1, updatedAt: "2026-08-16T00:00:00Z" },
+    ]);
+    vi.spyOn(knowledgeApi, "getArticle").mockResolvedValue(article);
+    vi.spyOn(knowledgeApi, "getCodexMergePublicationContext").mockResolvedValue(null);
+    const save = vi.spyOn(knowledgeApi, "saveArticle").mockRejectedValue({ code: "TEST-001", message: "確認停止", action: "テストを確認" });
+
+    renderEditor(`/articles/${article.id}/edit`);
+    fireEvent.change(await screen.findByLabelText(/概要/), { target: { value: "更新後の概要" } });
+    fireEvent.click(screen.getByRole("button", { name: "下書きを保存" }));
+
+    await waitFor(() => expect(save).toHaveBeenCalledWith(expect.objectContaining({
+      symptoms: article.symptoms,
+      causes: article.causes,
+      targets: article.targets,
+      errorCodes: article.errorCodes,
+      procedures: article.procedures,
+      cautions: article.cautions,
+      searchTerms: article.searchTerms,
       relatedArticleIds: ["related-1"],
     })));
   });

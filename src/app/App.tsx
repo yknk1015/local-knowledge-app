@@ -15,6 +15,7 @@ const LoginPage = lazy(() => import("../pages/LoginPage").then((module) => ({ de
 const UsersPage = lazy(() => import("../pages/UsersPage").then((module) => ({ default: module.UsersPage })));
 const CsvImportPage = lazy(() => import("../pages/CsvImportPage").then((module) => ({ default: module.CsvImportPage })));
 const SynonymsPage = lazy(() => import("../pages/SynonymsPage").then((module) => ({ default: module.SynonymsPage })));
+const TagsPage = lazy(() => import("../pages/TagsPage").then((module) => ({ default: module.TagsPage })));
 const HistoryPage = lazy(() => import("../pages/HistoryPage").then((module) => ({ default: module.HistoryPage })));
 const JsonTransferPage = lazy(() => import("../pages/JsonTransferPage").then((module) => ({ default: module.JsonTransferPage })));
 
@@ -40,6 +41,7 @@ export function App() {
             <Route path="/articles/:articleId/edit" element={<ArticleEditorPage />} />
             <Route path="/categories" element={<CategoriesPage />} />
             <Route path="/synonyms" element={<SynonymsPage />} />
+            <Route path="/tags" element={<TagsPage />} />
             <Route path="/history" element={<HistoryPage />} />
             <Route path="/manage" element={<ArticleManagementPage />} />
             <Route path="/manage/csv-import" element={<CsvImportPage />} />

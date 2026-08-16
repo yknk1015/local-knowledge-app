@@ -192,36 +192,107 @@ fn validate_copy_block(object: &Map<String, Value>) -> AppResult<&str> {
 }
 
 fn validate_image(attrs: Option<&Value>) -> AppResult<AttachmentReference> {
-    let attrs = attrs.and_then(Value::as_object).ok_or_else(invalid_image)?;
-    if attrs
+    let attrs = attrs.and_then(Value::as_object).ok_or_else(|| {
+        invalid_image_diagnostic(
+            "A01",
+            "画像の属性情報がないか、オブジェクト形式ではありません。",
+        )
+    })?;
+    let mut unexpected_attributes = attrs
         .keys()
-        .any(|key| !["src", "alt", "title", "attachmentId"].contains(&key.as_str()))
-    {
-        return Err(invalid_image());
+        .filter(|key| !["src", "alt", "title", "attachmentId"].contains(&key.as_str()))
+        .map(|key| diagnostic_attribute_name(key))
+        .collect::<Vec<_>>();
+    if !unexpected_attributes.is_empty() {
+        unexpected_attributes.sort();
+        let omitted_count = unexpected_attributes.len().saturating_sub(8);
+        unexpected_attributes.truncate(8);
+        let omitted = if omitted_count == 0 {
+            String::new()
+        } else {
+            format!("、ほか{omitted_count}件")
+        };
+        return Err(invalid_image_diagnostic(
+            "A02",
+            format!(
+                "許可されていない画像属性があります（属性名: {}{}）。",
+                unexpected_attributes.join(", "),
+                omitted
+            ),
+        ));
     }
-    let id = attrs
+    let id_value = attrs
         .get("attachmentId")
-        .and_then(Value::as_str)
-        .ok_or_else(invalid_image)?;
-    Uuid::parse_str(id).map_err(|_| invalid_image())?;
+        .ok_or_else(|| invalid_image_diagnostic("I01", "画像の添付IDがありません。"))?;
+    let id = id_value.as_str().ok_or_else(|| {
+        invalid_image_diagnostic("I02", "画像の添付IDが文字列形式ではありません。")
+    })?;
+    Uuid::parse_str(id)
+        .map_err(|_| invalid_image_diagnostic("I03", "画像の添付IDがUUID形式ではありません。"))?;
     let expected_source = format!("knowledge-attachment:{id}");
-    if attrs.get("src").and_then(Value::as_str) != Some(expected_source.as_str()) {
-        return Err(invalid_image());
+    let source_value = attrs
+        .get("src")
+        .ok_or_else(|| invalid_image_diagnostic("S01", "画像の保存用参照がありません。"))?;
+    let source = source_value.as_str().ok_or_else(|| {
+        invalid_image_diagnostic("S02", "画像の保存用参照が文字列形式ではありません。")
+    })?;
+    if source != expected_source {
+        return Err(invalid_image_diagnostic(
+            "S03",
+            "画像の保存用参照と添付IDが一致しません。",
+        ));
     }
-    let alt_text = nullable_limited_text(attrs.get("alt"), 500)?;
-    let _title = nullable_limited_text(attrs.get("title"), 500)?;
+    let alt_text =
+        nullable_limited_image_text(attrs.get("alt"), 500, "T01", "T02", "代替テキスト")?;
+    let _title =
+        nullable_limited_image_text(attrs.get("title"), 500, "T03", "T04", "画像タイトル")?;
     Ok(AttachmentReference {
         id: id.to_owned(),
         alt_text,
     })
 }
 
-fn nullable_limited_text(value: Option<&Value>, maximum: usize) -> AppResult<String> {
+fn nullable_limited_image_text(
+    value: Option<&Value>,
+    maximum: usize,
+    type_code: &str,
+    length_code: &str,
+    field_name: &str,
+) -> AppResult<String> {
     match value {
         None | Some(Value::Null) => Ok(String::new()),
         Some(Value::String(text)) if text.chars().count() <= maximum => Ok(text.clone()),
-        _ => Err(invalid_image()),
+        Some(Value::String(text)) => Err(invalid_image_diagnostic(
+            length_code,
+            format!(
+                "{field_name}が{maximum}文字を超えています（文字数: {}）。",
+                text.chars().count()
+            ),
+        )),
+        _ => Err(invalid_image_diagnostic(
+            type_code,
+            format!("{field_name}が文字列形式ではありません。"),
+        )),
     }
+}
+
+fn diagnostic_attribute_name(name: &str) -> String {
+    let character_count = name.chars().count();
+    let mut sanitized = name
+        .chars()
+        .take(32)
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | ':') {
+                character
+            } else {
+                '?'
+            }
+        })
+        .collect::<String>();
+    if character_count > 32 {
+        sanitized.push('…');
+    }
+    sanitized
 }
 
 fn validate_attributes(node_type: &str, attrs: Option<&Value>) -> AppResult<()> {
@@ -360,6 +431,17 @@ fn invalid_image() -> AppError {
         "ATT-004",
         "回答内の画像参照が正しくありません。",
         "画像を一度削除し、画像追加ボタンから選び直してください。外部画像URLやBase64画像は使用できません。",
+    )
+}
+
+fn invalid_image_diagnostic(reason: &str, detail: impl Into<String>) -> AppError {
+    AppError::new(
+        &format!("ATT-004-{reason}"),
+        "回答内の画像参照が正しくありません。",
+        format!(
+            "画像診断 IMG-20260816-01/{reason}: {} この診断番号と説明だけを開発側へ連絡してください。FAQ本文、画像、ファイルパス、利用者データは送らないでください。",
+            detail.into()
+        ),
     )
 }
 
@@ -523,6 +605,75 @@ mod tests {
     }
 
     #[test]
+    fn reports_one_safe_diagnostic_code_for_each_image_validation_branch() {
+        let id = Uuid::now_v7().to_string();
+        let marker = format!("knowledge-attachment:{id}");
+        let cases = [
+            ("A01", Value::Null),
+            (
+                "A02",
+                json!({
+                    "src": marker,
+                    "alt": null,
+                    "title": null,
+                    "attachmentId": id,
+                    "width": 640,
+                    "style": r"background:url(C:\secret\image.png)"
+                }),
+            ),
+            ("I01", json!({"src": marker, "alt": null, "title": null})),
+            (
+                "I02",
+                json!({"src": marker, "alt": null, "title": null, "attachmentId": 1}),
+            ),
+            (
+                "I03",
+                json!({"src": marker, "alt": null, "title": null, "attachmentId": "not-a-uuid"}),
+            ),
+            (
+                "S01",
+                json!({"alt": null, "title": null, "attachmentId": id}),
+            ),
+            (
+                "S02",
+                json!({"src": 1, "alt": null, "title": null, "attachmentId": id}),
+            ),
+            (
+                "S03",
+                json!({"src": r"C:\secret\image.png", "alt": null, "title": null, "attachmentId": id}),
+            ),
+            (
+                "T01",
+                json!({"src": marker, "alt": {"secret": "value"}, "title": null, "attachmentId": id}),
+            ),
+            (
+                "T02",
+                json!({"src": marker, "alt": "x".repeat(501), "title": null, "attachmentId": id}),
+            ),
+            (
+                "T03",
+                json!({"src": marker, "alt": null, "title": false, "attachmentId": id}),
+            ),
+            (
+                "T04",
+                json!({"src": marker, "alt": null, "title": "x".repeat(501), "attachmentId": id}),
+            ),
+        ];
+
+        for (reason, attrs) in cases {
+            let document = json!({
+                "type": "doc",
+                "content": [{"type": "image", "attrs": attrs}]
+            });
+            let error = validate_and_extract_with_attachments(&document).unwrap_err();
+            assert_eq!(error.code, format!("ATT-004-{reason}"));
+            assert!(error.action.contains(&format!("IMG-20260816-01/{reason}")));
+            assert!(!error.action.contains("secret"));
+            assert!(!error.action.contains("image.png"));
+        }
+    }
+
+    #[test]
     fn json_export_removes_images_but_preserves_other_content() {
         let id = Uuid::now_v7().to_string();
         let document = json!({
@@ -567,7 +718,7 @@ mod tests {
                 validate_and_extract_with_attachments(&document)
                     .unwrap_err()
                     .code,
-                "ATT-004"
+                "ATT-004-S03"
             );
         }
     }

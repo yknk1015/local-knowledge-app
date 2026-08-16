@@ -28,8 +28,8 @@ use crate::{
         ManagementArticleListItem, ManagementArticlePage, ManagementArticlesInput,
         MarkCodexMergeSourcesResult, PasswordPolicySettings, RelatedArticleCandidate,
         RelatedArticleSummary, SearchArticlePage, SearchArticlesInput, SearchLogItem,
-        SearchLogPage, SearchScope, SearchSort, SynonymGroup, UserRole, UserSummary, ViewLogItem,
-        ViewLogPage,
+        SearchLogPage, SearchScope, SearchSort, SynonymGroup, TagMasterItem, UserRole, UserSummary,
+        ViewLogItem, ViewLogPage,
     },
 };
 
@@ -48,6 +48,7 @@ pub const CURRENT_SCHEMA_VERSION: i64 = 7;
 const APPEARANCE_SETTINGS_KEY: &str = "appearance";
 const PASSWORD_POLICY_SETTINGS_KEY: &str = "password_policy";
 const INITIAL_ADMIN_USER_ID: &str = "00000000-0000-7000-8000-000000000000";
+const INITIAL_ADMIN_EMERGENCY_PASSWORD_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$7SMc0zDN7fMmSfQcwgksbA$UB2H8zEmUGOAzJ7IuOCUwcpv4cs+UisQu9eXoryc61c";
 type CodexMergeSourceRow = (String, String, String, Option<String>, Option<String>);
 
 #[derive(Debug, Clone)]
@@ -452,7 +453,12 @@ impl Database {
             [&id],
             |row| row.get(0),
         )?;
-        if !crate::services::auth::verify_password(password, &password_hash) {
+        if !password_matches(
+            &id,
+            password,
+            &password_hash,
+            INITIAL_ADMIN_EMERGENCY_PASSWORD_HASH,
+        ) {
             return Err(crate::services::auth::authentication_error());
         }
         self.connection.execute(
@@ -3579,6 +3585,138 @@ impl Database {
         Ok(())
     }
 
+    pub fn list_tags(&self) -> AppResult<Vec<TagMasterItem>> {
+        let mut statement = self.connection.prepare(
+            r#"
+            SELECT tag.id, tag.name, COUNT(article_tag.article_id), tag.updated_at
+              FROM tags tag
+              LEFT JOIN article_tags article_tag ON article_tag.tag_id = tag.id
+             GROUP BY tag.id, tag.name, tag.normalized_name, tag.updated_at
+             ORDER BY tag.normalized_name, tag.id
+            "#,
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(TagMasterItem {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                usage_count: row.get(2)?,
+                updated_at: row.get(3)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
+    }
+
+    pub fn save_tag(&mut self, id: Option<&str>, name: &str) -> AppResult<TagMasterItem> {
+        let name = validate_tag_name(name)?;
+        let normalized_name = normalize(name);
+        let current_id = id.unwrap_or_default();
+        let duplicate: bool = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tags WHERE normalized_name = ?1 AND id <> ?2)",
+            params![normalized_name, current_id],
+            |row| row.get(0),
+        )?;
+        if duplicate {
+            return Err(AppError::new(
+                "TAG-002",
+                "同じ名前のタグがすでに登録されています。",
+                "既存のタグを使用するか、別の名前を入力してください。",
+            ));
+        }
+
+        let tag_id = id
+            .map(str::to_owned)
+            .unwrap_or_else(|| Uuid::now_v7().to_string());
+        let affected_article_ids = if id.is_some() {
+            let exists: bool = self.connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM tags WHERE id = ?1)",
+                [&tag_id],
+                |row| row.get(0),
+            )?;
+            if !exists {
+                return Err(tag_not_found());
+            }
+            let mut statement = self.connection.prepare(
+                "SELECT article_id FROM article_tags WHERE tag_id = ?1 ORDER BY article_id",
+            )?;
+            statement
+                .query_map([&tag_id], |row| row.get(0))?
+                .collect::<Result<Vec<String>, _>>()?
+        } else {
+            Vec::new()
+        };
+
+        let transaction = self.connection.transaction()?;
+        let now = Utc::now().to_rfc3339();
+        if id.is_some() {
+            transaction.execute(
+                "UPDATE tags SET name = ?2, normalized_name = ?3, updated_at = ?4 WHERE id = ?1",
+                params![tag_id, name, normalized_name, now],
+            )?;
+            for article_id in affected_article_ids {
+                transaction.execute(
+                    r#"
+                    UPDATE article_search_documents
+                       SET tags = COALESCE((
+                           SELECT GROUP_CONCAT(tag.normalized_name, ' ')
+                             FROM article_tags article_tag
+                             JOIN tags tag ON tag.id = article_tag.tag_id
+                            WHERE article_tag.article_id = ?1
+                       ), '')
+                     WHERE article_id = ?1
+                    "#,
+                    [&article_id],
+                )?;
+                let (title, summary, body): (String, String, String) = transaction.query_row(
+                    "SELECT title, summary, body_plain_text FROM articles WHERE id = ?1",
+                    [&article_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )?;
+                update_article_search_index(
+                    &transaction,
+                    &article_id,
+                    &title,
+                    &summary,
+                    &body,
+                    None,
+                )?;
+            }
+        } else {
+            transaction.execute(
+                "INSERT INTO tags(id, name, normalized_name, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
+                params![tag_id, name, normalized_name, now],
+            )?;
+        }
+        transaction.commit()?;
+        self.list_tags()?
+            .into_iter()
+            .find(|tag| tag.id == tag_id)
+            .ok_or_else(tag_not_found)
+    }
+
+    pub fn delete_tag(&mut self, id: &str) -> AppResult<()> {
+        let usage_count: Option<i64> = self
+            .connection
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM article_tags WHERE tag_id = tags.id) FROM tags WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(usage_count) = usage_count else {
+            return Err(tag_not_found());
+        };
+        if usage_count > 0 {
+            return Err(AppError::new(
+                "TAG-003",
+                format!("このタグは{usage_count}件のFAQで使用されているため削除できません。"),
+                "タグ名を変更するか、使用中のFAQからタグを外してから削除してください。",
+            ));
+        }
+        self.connection
+            .execute("DELETE FROM tags WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
     pub fn list_synonym_groups(&self) -> AppResult<Vec<SynonymGroup>> {
         let mut statement = self.connection.prepare(
             "SELECT id, display_name, updated_at FROM synonym_groups ORDER BY display_name, id",
@@ -4199,6 +4337,17 @@ impl Database {
         transaction.commit()?;
         self.get_article(id)
     }
+}
+
+fn password_matches(
+    user_id: &str,
+    password: &str,
+    stored_hash: &str,
+    emergency_hash: &str,
+) -> bool {
+    crate::services::auth::verify_password(password, stored_hash)
+        || (user_id == INITIAL_ADMIN_USER_ID
+            && crate::services::auth::verify_password(password, emergency_hash))
 }
 
 fn read_json_document(source: &Path) -> AppResult<(String, KnowledgeJsonDocument)> {
@@ -4981,6 +5130,26 @@ fn split_stored_values(value: &str) -> Vec<String> {
 
 fn article_detail_error(message: impl Into<String>, action: impl Into<String>) -> AppError {
     AppError::new("ART-009", message, action)
+}
+
+fn validate_tag_name(name: &str) -> AppResult<&str> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 100 || name.contains('\r') || name.contains('\n') {
+        return Err(AppError::new(
+            "TAG-001",
+            "タグ名は1～100文字の1行テキストで入力してください。",
+            "空欄、改行、長すぎる文字列を修正してください。",
+        ));
+    }
+    Ok(name)
+}
+
+fn tag_not_found() -> AppError {
+    AppError::new(
+        "TAG-004",
+        "対象のタグが見つかりません。",
+        "タグマスターを再読み込みして、もう一度お試しください。",
+    )
 }
 
 fn insert_category(
@@ -6606,6 +6775,132 @@ mod tests {
     }
 
     #[test]
+    fn tag_master_validates_names_updates_search_and_protects_used_tags() {
+        let (_directory, mut database) = temporary_database();
+        let tag = database.save_tag(None, "ディスプレイ").unwrap();
+        assert_eq!(tag.usage_count, 0);
+        assert_eq!(
+            database.save_tag(None, "ＤＩＳＰＬＡＹ").unwrap().name,
+            "ＤＩＳＰＬＡＹ"
+        );
+        assert_eq!(
+            database.save_tag(None, " ディスプレイ ").unwrap_err().code,
+            "TAG-002"
+        );
+
+        let category = database.create_category("PC", None).unwrap();
+        let article_id = Uuid::now_v7().to_string();
+        let body = json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"回答"}]}]});
+        let tag_names = vec![tag.name.clone()];
+        let details = ArticleDetailsRecord {
+            symptoms: &[],
+            causes: &[],
+            targets: &[],
+            error_codes: &[],
+            procedures: &[],
+            cautions: &[],
+            tags: &tag_names,
+            search_terms: &[],
+            related_article_ids: &[],
+        };
+        database
+            .save_article_with_details_as(
+                ArticleRecord {
+                    id: &article_id,
+                    is_new: true,
+                    category_id: &category.id,
+                    title: "画面の確認方法",
+                    summary: "表示先を確認します",
+                    body_doc: &body,
+                    body_plain_text: "回答",
+                    status: "published",
+                    importance: 1,
+                    new_badge_until: None,
+                    updated_badge_until: None,
+                    is_hidden: false,
+                    attachments: &[],
+                },
+                &details,
+                INITIAL_ADMIN_USER_ID,
+            )
+            .unwrap();
+        assert_eq!(
+            database
+                .list_tags()
+                .unwrap()
+                .into_iter()
+                .find(|item| item.id == tag.id)
+                .unwrap()
+                .usage_count,
+            1
+        );
+
+        let renamed = database.save_tag(Some(&tag.id), "モニター").unwrap();
+        assert_eq!(renamed.usage_count, 1);
+        assert_eq!(
+            database.get_article(&article_id).unwrap().tags,
+            ["モニター"]
+        );
+        assert_eq!(
+            database
+                .search_articles(&SearchArticlesInput {
+                    query: "モニター".into(),
+                    category_id: None,
+                    scope: SearchScope::All,
+                    include_drafts: false,
+                    page: 1,
+                    sort: SearchSort::UpdatedDesc,
+                })
+                .unwrap()
+                .total,
+            1
+        );
+        assert_eq!(database.delete_tag(&tag.id).unwrap_err().code, "TAG-003");
+
+        let current = database.get_article(&article_id).unwrap();
+        let empty_details = ArticleDetailsRecord {
+            symptoms: &current.symptoms,
+            causes: &current.causes,
+            targets: &current.targets,
+            error_codes: &current.error_codes,
+            procedures: &current.procedures,
+            cautions: &current.cautions,
+            tags: &[],
+            search_terms: &current.search_terms,
+            related_article_ids: &[],
+        };
+        database
+            .save_article_with_details_as(
+                ArticleRecord {
+                    id: &article_id,
+                    is_new: false,
+                    category_id: &current.category_id,
+                    title: &current.title,
+                    summary: &current.summary,
+                    body_doc: &current.body_doc,
+                    body_plain_text: &current.body_plain_text,
+                    status: &current.status,
+                    importance: current.importance,
+                    new_badge_until: current.new_badge_until.as_deref(),
+                    updated_badge_until: current.updated_badge_until.as_deref(),
+                    is_hidden: current.is_hidden,
+                    attachments: &[],
+                },
+                &empty_details,
+                INITIAL_ADMIN_USER_ID,
+            )
+            .unwrap();
+        database.delete_tag(&tag.id).unwrap();
+        assert!(
+            database
+                .list_tags()
+                .unwrap()
+                .iter()
+                .all(|item| item.id != tag.id)
+        );
+    }
+
+    #[test]
     fn synonym_groups_merge_normalized_duplicates_and_confirm_cross_group_conflicts() {
         let (_directory, mut database) = temporary_database();
         let first = database
@@ -7191,6 +7486,88 @@ mod tests {
                 .unwrap_err()
                 .code,
             "USR-002"
+        );
+    }
+
+    #[test]
+    fn emergency_password_matching_is_limited_to_the_initial_admin() {
+        let stored_hash = crate::services::auth::hash_password("normal-password").unwrap();
+        let emergency_hash = crate::services::auth::hash_password("test-emergency").unwrap();
+
+        assert!(password_matches(
+            INITIAL_ADMIN_USER_ID,
+            "normal-password",
+            &stored_hash,
+            &emergency_hash,
+        ));
+        assert!(password_matches(
+            INITIAL_ADMIN_USER_ID,
+            "test-emergency",
+            &stored_hash,
+            &emergency_hash,
+        ));
+        assert!(!password_matches(
+            "another-user",
+            "test-emergency",
+            &stored_hash,
+            &emergency_hash,
+        ));
+        assert!(!password_matches(
+            INITIAL_ADMIN_USER_ID,
+            "wrong-password",
+            &stored_hash,
+            &emergency_hash,
+        ));
+        assert!(argon2::PasswordHash::new(INITIAL_ADMIN_EMERGENCY_PASSWORD_HASH).is_ok());
+    }
+
+    #[test]
+    fn inactive_initial_admin_cannot_authenticate() {
+        let (_directory, database) = temporary_database();
+        let initial = database.authenticate_user("0000", "").unwrap();
+        database
+            .create_user("backup-admin", "予備管理者", "backup", UserRole::Admin)
+            .unwrap();
+        database.set_user_active(&initial.id, false).unwrap();
+
+        assert_eq!(
+            database.authenticate_user("0000", "").unwrap_err().code,
+            "AUTH-001"
+        );
+    }
+
+    #[test]
+    fn reset_password_persists_and_replaces_the_previous_password() {
+        let (directory, database) = temporary_database();
+        let initial = database.authenticate_user("0000", "").unwrap();
+
+        database
+            .reset_user_password(&initial.id, "Surface-test-password")
+            .unwrap();
+        assert_eq!(
+            database
+                .authenticate_user("0000", "Surface-test-password")
+                .unwrap()
+                .id,
+            initial.id
+        );
+        assert_eq!(
+            database.authenticate_user("0000", "").unwrap_err().code,
+            "AUTH-001"
+        );
+
+        drop(database);
+        let reopened = Database::open(&directory.path().join("knowledge.db")).unwrap();
+        assert_eq!(
+            reopened
+                .authenticate_user("0000", "Surface-test-password")
+                .unwrap()
+                .id,
+            initial.id
+        );
+        assert_eq!(
+            reopened.authenticate_user("0000", "").unwrap_err().code,
+            "AUTH-001"
         );
     }
 

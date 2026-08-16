@@ -48,7 +48,7 @@ export function LoginPage() {
           <label>
             <span>パスワード</span>
             <input type="password" autoComplete="current-password" maxLength={1024} value={password} onChange={(event) => setPassword(event.target.value)} />
-            <small>初期ユーザー「0000」はパスワード空欄でログインできます。</small>
+            <small>初期ユーザー「0000」は、初回登録直後のみパスワード空欄でログインできます。</small>
           </label>
           <button type="submit" className="button primary" disabled={submitting}>{submitting ? "ログイン中…" : "ログイン"}</button>
         </form>

@@ -52,6 +52,7 @@ describe("UsersPage password policy", () => {
     vi.clearAllMocks();
     mocks.listUsers.mockResolvedValue([initialAdmin]);
     mocks.getPasswordPolicy.mockResolvedValue({ allowEmptyPasswords: true });
+    mocks.resetUserPassword.mockResolvedValue(initialAdmin);
   });
 
   it("removes the empty-password note from the create form", async () => {
@@ -67,10 +68,63 @@ describe("UsersPage password policy", () => {
     render(<UsersPage />);
 
     await waitFor(() => expect(screen.getByLabelText("初期パスワード")).toBeRequired());
-    vi.spyOn(window, "prompt").mockReturnValue("");
     fireEvent.click(screen.getByRole("button", { name: "パスワード再設定" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("空欄のパスワードは現在許可されていません");
+    expect(await screen.findByRole("dialog")).toBeVisible();
+    expect(screen.getByLabelText("新しいパスワード")).toBeRequired();
+    expect(screen.getByLabelText("新しいパスワード（確認）")).toBeRequired();
+    fireEvent.click(screen.getByRole("button", { name: "再設定する" }));
+    expect(mocks.resetUserPassword).not.toHaveBeenCalled();
+  });
+
+  it("sends the confirmed password exactly and reports success", async () => {
+    render(<UsersPage />);
+    await screen.findByText("ID: 0000");
+    fireEvent.click(screen.getByRole("button", { name: "パスワード再設定" }));
+
+    fireEvent.change(screen.getByLabelText("新しいパスワード"), {
+      target: { value: "Surface-test-password" },
+    });
+    fireEvent.change(screen.getByLabelText("新しいパスワード（確認）"), {
+      target: { value: "Surface-test-password" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "再設定する" }));
+
+    await waitFor(() => expect(mocks.resetUserPassword).toHaveBeenCalledWith(
+      "initial-admin",
+      "Surface-test-password",
+    ));
+    expect(await screen.findByText("初期管理者のパスワードを再設定しました。")).toBeVisible();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("allows a deliberately confirmed empty password only while the policy permits it", async () => {
+    render(<UsersPage />);
+    await screen.findByText("ID: 0000");
+    fireEvent.click(screen.getByRole("button", { name: "パスワード再設定" }));
+
+    expect(screen.getByLabelText("新しいパスワード")).not.toBeRequired();
+    expect(screen.getByLabelText("新しいパスワード（確認）")).not.toBeRequired();
+    fireEvent.click(screen.getByRole("button", { name: "再設定する" }));
+
+    await waitFor(() => expect(mocks.resetUserPassword).toHaveBeenCalledWith("initial-admin", ""));
+  });
+
+  it("keeps the reset dialog open when the confirmation does not match", async () => {
+    render(<UsersPage />);
+    await screen.findByText("ID: 0000");
+    fireEvent.click(screen.getByRole("button", { name: "パスワード再設定" }));
+
+    fireEvent.change(screen.getByLabelText("新しいパスワード"), {
+      target: { value: "first-password" },
+    });
+    fireEvent.change(screen.getByLabelText("新しいパスワード（確認）"), {
+      target: { value: "different-password" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "再設定する" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("確認用パスワードが一致しません");
+    expect(screen.getByRole("dialog")).toBeVisible();
     expect(mocks.resetUserPassword).not.toHaveBeenCalled();
   });
 });

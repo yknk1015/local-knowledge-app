@@ -14,9 +14,14 @@ $expectedInstallers = @(
         Purpose = "上書き更新試験専用の旧版（commit 5f99114e）"
     },
     [pscustomobject]@{
-        FileName = "KnowledgeApp_0.3.3_x64-setup.exe"
-        Sha256 = "8B54CD7D1D7DEDB42E0A5DDADD5AE815FDD04A482AB976EAB3780B6D1A3392D9"
-        Purpose = "本格利用候補版（source commit 87e33fe）"
+        FileName = "KnowledgeApp_0.3.4_x64-setup.exe"
+        Sha256 = "9194B31560CF076F9E244836816E12BB54EDF75A90ECA165F73837C0400CDD03"
+        Purpose = "旧検索情報・関連FAQ・変更済みパスワードを作る中間更新版"
+    },
+    [pscustomobject]@{
+        FileName = "KnowledgeApp_0.4.3_x64-setup.exe"
+        Sha256 = "6E3AA7508D511C1A6477C421982185FF3D447E731278D67CA5D16FA880271ABD"
+        Purpose = "画像保存の実機確認を反映した本格利用候補版"
     }
 )
 
@@ -55,6 +60,7 @@ if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
     $failures.Add("不足: SHA256SUMS.txt")
 }
 else {
+    $manifestFiles = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($line in Get-Content -LiteralPath $manifestPath -Encoding UTF8) {
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
         if ($line -notmatch '^([A-Fa-f0-9]{64}) \*(.+)$') {
@@ -67,6 +73,10 @@ else {
             $failures.Add("SHA256SUMS.txtの不正な相対パス: $relativeName")
             continue
         }
+        if (-not $manifestFiles.Add($relativeName)) {
+            $failures.Add("SHA256SUMS.txtの重複記載: $relativeName")
+            continue
+        }
         $targetPath = Join-Path $resolvedPackageDirectory $relativeName
         if (-not (Test-Path -LiteralPath $targetPath -PathType Leaf)) {
             $failures.Add("マニフェスト記載ファイルがありません: $relativeName")
@@ -76,6 +86,16 @@ else {
         if ($actualHash -ne $expectedHash) {
             $failures.Add("マニフェストSHA-256不一致: $relativeName")
         }
+    }
+    foreach ($packageFile in Get-ChildItem -LiteralPath $resolvedPackageDirectory -File) {
+        if ($packageFile.Name -eq "SHA256SUMS.txt") { continue }
+        if (-not $manifestFiles.Contains($packageFile.Name)) {
+            $failures.Add("SHA256SUMS.txtに未記載のファイル: $($packageFile.Name)")
+        }
+    }
+    $unexpectedDirectories = @(Get-ChildItem -LiteralPath $resolvedPackageDirectory -Directory)
+    foreach ($directory in $unexpectedDirectories) {
+        $failures.Add("想定外のサブフォルダ: $($directory.Name)")
     }
 }
 
@@ -128,4 +148,4 @@ if ($failures.Count -gt 0) {
 }
 
 Write-Host "PASS: パッケージのファイルと候補インストーラーのSHA-256が一致しました。" -ForegroundColor Green
-Write-Warning "両インストーラーは未署名です。許可された試験用Surface以外では実行せず、セキュリティ警告を会社規定に反して回避しないでください。"
+Write-Warning "3件のインストーラーは未署名です。許可された試験用Surface以外では実行せず、セキュリティ警告を会社規定に反して回避しないでください。"

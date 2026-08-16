@@ -75,6 +75,7 @@ describe("release FAQ screen workflow", () => {
     vi.spyOn(knowledgeApi, "saveSettings").mockImplementation(async (settings) => settings);
     vi.spyOn(knowledgeApi, "logout").mockResolvedValue();
     vi.spyOn(knowledgeApi, "listCategories").mockResolvedValue([category]);
+    vi.spyOn(knowledgeApi, "listTags").mockResolvedValue([]);
     vi.spyOn(knowledgeApi, "searchArticles").mockImplementation(async () => ({
       items: [{
         id: current.id,

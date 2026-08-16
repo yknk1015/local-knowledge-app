@@ -4,6 +4,7 @@ import {
   dehydrateManagedImages,
   hydrateManagedImages,
   insertCopyBlockFromSelection,
+  RichTextEditor,
   RichTextViewer,
   stripLinksFromPastedHtml,
 } from "./RichTextEditor";
@@ -75,6 +76,69 @@ describe("managed FAQ images", () => {
     expect(image).toBeDefined();
     expect((image!.attrs as Record<string, unknown>).src).toBe("asset://localhost/C:/safe/setting.png");
     expect(dehydrateManagedImages(hydrated)).toEqual(document);
+  });
+
+  it("removes display-only image attributes before saving", () => {
+    const displayedDocument = {
+      type: "doc",
+      content: [{
+        type: "image",
+        attrs: {
+          src: "asset://localhost/C:/safe/setting.png",
+          alt: "設定画面",
+          title: null,
+          attachmentId: "018f0000-0000-7000-8000-000000000001",
+          width: 640,
+          height: 480,
+          style: "width: 640px",
+        },
+      }],
+    };
+
+    expect(dehydrateManagedImages(displayedDocument)).toEqual({
+      type: "doc",
+      content: [{
+        type: "image",
+        attrs: {
+          src: "knowledge-attachment:018f0000-0000-7000-8000-000000000001",
+          alt: "設定画面",
+          title: null,
+          attachmentId: "018f0000-0000-7000-8000-000000000001",
+        },
+      }],
+    });
+  });
+
+  it("emits only the managed image attributes accepted by the Rust save boundary", async () => {
+    const onChange = vi.fn();
+    const onRequestImage = vi.fn().mockResolvedValue({
+      id: "018f0000-0000-7000-8000-000000000001",
+      assetPath: "C:/safe/setting.png",
+      altText: "setting",
+    });
+    vi.spyOn(window, "prompt").mockReturnValue("設定画面");
+
+    render(
+      <RichTextEditor
+        value={{ type: "doc", content: [{ type: "paragraph" }] }}
+        onChange={onChange}
+        onRequestImage={onRequestImage}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "画像" }));
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const savedDocument = onChange.mock.calls.at(-1)?.[0] as {
+      content: Array<{ type: string; attrs?: Record<string, unknown> }>;
+    };
+    const image = savedDocument.content.find((node) => node.type === "image");
+    expect(image?.attrs).toEqual({
+      src: "knowledge-attachment:018f0000-0000-7000-8000-000000000001",
+      alt: "設定画面",
+      title: null,
+      attachmentId: "018f0000-0000-7000-8000-000000000001",
+    });
   });
 });
 

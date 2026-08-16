@@ -161,6 +161,13 @@ export interface RelatedArticleCandidate {
   isRelated: boolean;
 }
 
+export interface TagMasterItem {
+  id: string;
+  name: string;
+  usageCount: number;
+  updatedAt: string;
+}
+
 export interface ArticleMergeInfo {
   targetArticleId: string;
   targetArticleTitle: string;

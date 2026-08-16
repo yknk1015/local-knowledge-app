@@ -73,5 +73,5 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: KnowledgeApp-Windows-NSIS-${{ github.sha }}
-          path: src-tauri/target/release/bundle/nsis/KnowledgeApp_0.3.3_*-setup.exe
+          path: src-tauri/target/release/bundle/nsis/KnowledgeApp_0.4.4_*-setup.exe
           if-no-files-found: error

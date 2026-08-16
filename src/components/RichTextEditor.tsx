@@ -30,7 +30,15 @@ export interface ManagedImageSource {
 const ManagedImage = Image.extend({
   addAttributes() {
     return {
-      ...this.parent?.(),
+      src: {
+        default: null,
+      },
+      alt: {
+        default: null,
+      },
+      title: {
+        default: null,
+      },
       attachmentId: {
         default: null,
         parseHTML: (element) => element.getAttribute("data-attachment-id"),
@@ -241,7 +249,13 @@ export function hydrateManagedImages(
 export function dehydrateManagedImages(value: Record<string, unknown>): Record<string, unknown> {
   return transformImages(value, (attributes) => {
     const id = typeof attributes.attachmentId === "string" ? attributes.attachmentId : "";
-    return id ? { ...attributes, src: `knowledge-attachment:${id}` } : attributes;
+    if (!id) return attributes;
+    return {
+      src: `knowledge-attachment:${id}`,
+      alt: attributes.alt ?? null,
+      title: attributes.title ?? null,
+      attachmentId: id,
+    };
   });
 }
 
