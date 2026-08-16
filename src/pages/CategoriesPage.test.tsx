@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   listCategories: vi.fn(),
   createCategory: vi.fn(),
   updateCategory: vi.fn(),
+  reorderCategory: vi.fn(),
   deleteCategory: vi.fn(),
 }));
 
@@ -60,5 +61,19 @@ describe("CategoriesPage", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("CAT-005");
     expect(screen.getByRole("alert")).toHaveTextContent("配下分類またはFAQが残っている");
+  });
+
+  it("moves a category only among siblings", async () => {
+    const reordered = [categories[2], categories[0], categories[1]];
+    mocks.reorderCategory.mockResolvedValue(reordered);
+    render(<CategoriesPage />);
+
+    await screen.findAllByText("PC");
+    expect(screen.getByRole("button", { name: "PCを上へ" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Windowsを上へ" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "ネットワークを上へ" }));
+
+    await waitFor(() => expect(mocks.reorderCategory).toHaveBeenCalledWith("root-b", "up"));
+    expect(await screen.findByText(/上へ移動しました/)).toBeVisible();
   });
 });

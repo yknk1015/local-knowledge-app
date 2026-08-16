@@ -52,6 +52,17 @@ export function CategoriesPage() {
         category.depth + 1 + relativeDepth <= 5,
     );
   }, [byId, categories, editingCategory]);
+  const siblingPositions = useMemo(() => {
+    const groups = new Map<string, Category[]>();
+    for (const category of categories) {
+      const key = category.parentId ?? "__root__";
+      groups.set(key, [...(groups.get(key) ?? []), category]);
+    }
+    return new Map([...groups.values()].flatMap((siblings) => siblings.map((category, index) => [
+      category.id,
+      { first: index === 0, last: index === siblings.length - 1 },
+    ] as const)));
+  }, [categories]);
 
   const resetForm = () => {
     setEditingId(null);
@@ -109,6 +120,20 @@ export function CategoriesPage() {
     }
   };
 
+  const reorderCategory = async (category: Category, direction: "up" | "down") => {
+    setSaving(true);
+    setError(null);
+    setNotice("");
+    try {
+      setCategories(await knowledgeApi.reorderCategory(category.id, direction));
+      setNotice(`分類「${category.name}」を${direction === "up" ? "上" : "下"}へ移動しました。`);
+    } catch (caught) {
+      setError(toAppError(caught));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="page categories-page">
       <div className="page-heading">
@@ -141,6 +166,8 @@ export function CategoriesPage() {
                   </div>
                   <span>{category.articleCount}件</span>
                   <div className="category-row-actions">
+                    <button type="button" aria-label={`${category.name}を上へ`} title="同じ階層内で上へ" disabled={saving || siblingPositions.get(category.id)?.first} onClick={() => void reorderCategory(category, "up")}>↑</button>
+                    <button type="button" aria-label={`${category.name}を下へ`} title="同じ階層内で下へ" disabled={saving || siblingPositions.get(category.id)?.last} onClick={() => void reorderCategory(category, "down")}>↓</button>
                     <button type="button" onClick={() => startEditing(category)}>編集</button>
                     <button type="button" className="danger" disabled={saving} onClick={() => void deleteCategory(category)}>削除</button>
                   </div>

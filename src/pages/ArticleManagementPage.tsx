@@ -206,6 +206,7 @@ export function ArticleManagementPage() {
         <div className="management-heading-actions">
           <button type="button" className="button secondary" disabled={busyId === "csv-export"} onClick={() => void exportCsv()}>CSVエクスポート</button>
           <Link to="/manage/csv-import" className="button secondary">CSVインポート</Link>
+          <Link to="/manage/json-transfer" className="button secondary">JSON入出力</Link>
           <Link to="/articles/new" className="button primary">＋ 新しいFAQ</Link>
         </div>
       </div>

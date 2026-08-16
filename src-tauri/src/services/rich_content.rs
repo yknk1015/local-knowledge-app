@@ -68,6 +68,26 @@ pub fn remap_attachment_ids(
     Ok(remapped)
 }
 
+pub fn without_images(document: &Value) -> AppResult<Value> {
+    validate_and_extract_with_attachments(document)?;
+    let mut sanitized = document.clone();
+    remove_image_nodes(&mut sanitized)?;
+    validate_and_extract_with_attachments(&sanitized)?;
+    Ok(sanitized)
+}
+
+fn remove_image_nodes(node: &mut Value) -> AppResult<()> {
+    let object = node.as_object_mut().ok_or_else(invalid_document)?;
+    if let Some(content) = object.get_mut("content") {
+        let children = content.as_array_mut().ok_or_else(invalid_document)?;
+        children.retain(|child| child.get("type").and_then(Value::as_str) != Some("image"));
+        for child in children {
+            remove_image_nodes(child)?;
+        }
+    }
+    Ok(())
+}
+
 fn remap_node(node: &mut Value, replacements: &HashMap<String, String>) -> AppResult<()> {
     let object = node.as_object_mut().ok_or_else(invalid_document)?;
     if object.get("type").and_then(Value::as_str) == Some("image") {
@@ -500,6 +520,33 @@ mod tests {
         let validated = validate_and_extract_with_attachments(&document).unwrap();
         assert_eq!(validated.plain_text, "設定画面のスクリーンショット");
         assert_eq!(validated.attachments.len(), 1);
+    }
+
+    #[test]
+    fn json_export_removes_images_but_preserves_other_content() {
+        let id = Uuid::now_v7().to_string();
+        let document = json!({
+            "type": "doc",
+            "content": [
+                {"type":"paragraph","content":[{"type":"text","text":"手順"}]},
+                {"type":"image","attrs":{
+                    "src": format!("knowledge-attachment:{id}"),
+                    "alt": "画像",
+                    "title": null,
+                    "attachmentId": id
+                }},
+                {"type":"copyBlock","attrs":{"text":r"C:\manual.xlsx"}}
+            ]
+        });
+
+        let sanitized = without_images(&document).unwrap();
+        assert_eq!(sanitized["content"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            validate_and_extract_with_attachments(&sanitized)
+                .unwrap()
+                .plain_text,
+            r"手順 C:\manual.xlsx"
+        );
     }
 
     #[test]

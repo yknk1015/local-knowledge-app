@@ -1,11 +1,12 @@
 use std::{
     collections::{HashMap, HashSet},
-    fs::{self, File},
+    fs::{self, File, OpenOptions},
     io::{self, Read, Write},
     path::{Component, Path, PathBuf},
 };
 
 use chrono::Utc;
+use fs4::available_space;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -15,15 +16,15 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 use crate::{
     errors::{AppError, AppResult},
     models::{BackupCounts, BackupOverview, BackupPreview, BackupResult, RestoreResult},
-    repositories::database::Database,
+    repositories::database::{CURRENT_SCHEMA_VERSION, Database},
     services::data_root::{DataRootService, find_git_root},
 };
 
 const BACKUP_FORMAT_VERSION: u32 = 1;
 const RICH_TEXT_FORMAT_VERSION: u32 = 2;
-const CURRENT_SCHEMA_VERSION: i64 = 7;
 const MAX_ARCHIVE_FILES: usize = 10_000;
 const MAX_UNCOMPRESSED_BYTES: u64 = 10 * 1024 * 1024 * 1024;
+const MINIMUM_CAPACITY_MARGIN: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -64,16 +65,7 @@ pub fn backup_overview(
     data_root: &DataRootService,
     database: &Database,
 ) -> AppResult<BackupOverview> {
-    let mut estimated_bytes = fs::metadata(data_root.database_path())
-        .map(|metadata| metadata.len())
-        .unwrap_or(0);
-    for root in [
-        data_root.attachments_path(),
-        data_root.manuals_path(),
-        data_root.settings_path(),
-    ] {
-        estimated_bytes = estimated_bytes.saturating_add(directory_size(&root)?);
-    }
+    let estimated_bytes = estimate_backup_source_bytes(data_root)?;
     let settings_path = data_root.settings_path().join("backup.json");
     let default_directory = fs::read_to_string(settings_path)
         .ok()
@@ -95,7 +87,33 @@ pub fn create_full_backup(
     display_name: &str,
     overwrite: bool,
 ) -> AppResult<BackupResult> {
-    validate_destination(destination, display_name, overwrite)?;
+    create_full_backup_internal(
+        data_root,
+        database,
+        destination,
+        display_name,
+        overwrite,
+        true,
+    )
+}
+
+fn create_full_backup_internal(
+    data_root: &DataRootService,
+    database: &Database,
+    destination: &Path,
+    display_name: &str,
+    overwrite: bool,
+    remember_destination: bool,
+) -> AppResult<BackupResult> {
+    let estimated_bytes = estimate_backup_source_bytes(data_root)?;
+    let required_archive_bytes = required_archive_capacity(estimated_bytes);
+    validate_destination(destination, display_name, overwrite, required_archive_bytes)?;
+    validate_available_capacity(
+        &data_root.temp_path(),
+        estimated_bytes
+            .saturating_add(required_archive_bytes)
+            .saturating_add(MINIMUM_CAPACITY_MARGIN),
+    )?;
 
     let operation_id = Uuid::now_v7().to_string();
     let working_directory = data_root.temp_path().join(format!("backup-{operation_id}"));
@@ -115,7 +133,9 @@ pub fn create_full_backup(
         inspect_verified_archive(data_root, &local_archive)?;
         publish_archive(data_root, &local_archive, destination, overwrite)?;
         let published = inspect_verified_archive(data_root, destination)?;
-        remember_successful_directory(data_root, destination);
+        if remember_destination {
+            remember_successful_directory(data_root, destination);
+        }
 
         Ok(BackupResult {
             destination_path: destination.display().to_string(),
@@ -166,7 +186,14 @@ pub fn restore_backup(
             Utc::now().format("%Y%m%d_%H%M%S")
         );
         let safety_path = unique_safety_path(data_root, &safety_name);
-        create_full_backup(data_root, database, &safety_path, &safety_name, false)?;
+        create_full_backup_internal(
+            data_root,
+            database,
+            &safety_path,
+            &safety_name,
+            false,
+            false,
+        )?;
 
         let rollback_database = staging_directory.join("rollback-knowledge.db");
         database.backup_to(&rollback_database)?;
@@ -201,8 +228,62 @@ pub fn create_csv_import_safety_backup(
         Utc::now().format("%Y%m%d_%H%M%S")
     );
     let destination = unique_safety_path(data_root, &display_name);
-    create_full_backup(data_root, database, &destination, &display_name, false)?;
+    create_full_backup_internal(
+        data_root,
+        database,
+        &destination,
+        &display_name,
+        false,
+        false,
+    )?;
     Ok(destination)
+}
+
+pub fn create_json_import_safety_backup(
+    data_root: &DataRootService,
+    database: &Database,
+) -> AppResult<PathBuf> {
+    let display_name = format!(
+        "KnowledgeApp_before_json_import_{}",
+        Utc::now().format("%Y%m%d_%H%M%S")
+    );
+    let destination = unique_safety_path(data_root, &display_name);
+    create_full_backup_internal(
+        data_root,
+        database,
+        &destination,
+        &display_name,
+        false,
+        false,
+    )?;
+    Ok(destination)
+}
+
+pub fn create_pre_migration_backup_if_needed(
+    data_root: &DataRootService,
+) -> AppResult<Option<PathBuf>> {
+    let Some(database) = Database::open_existing_read_only(&data_root.database_path())? else {
+        return Ok(None);
+    };
+    let source_version = database.schema_version()?;
+    if source_version == CURRENT_SCHEMA_VERSION {
+        return Ok(None);
+    }
+
+    let display_name = format!(
+        "KnowledgeApp_before_migration_v{source_version}_to_v{CURRENT_SCHEMA_VERSION}_{}",
+        Utc::now().format("%Y%m%d_%H%M%S")
+    );
+    let destination = unique_safety_path(data_root, &display_name);
+    create_full_backup_internal(
+        data_root,
+        &database,
+        &destination,
+        &display_name,
+        false,
+        false,
+    )?;
+    Ok(Some(destination))
 }
 
 fn build_archive(
@@ -336,6 +417,24 @@ fn directory_size(root: &Path) -> AppResult<u64> {
         }
     }
     Ok(size)
+}
+
+fn estimate_backup_source_bytes(data_root: &DataRootService) -> AppResult<u64> {
+    let mut estimated_bytes = fs::metadata(data_root.database_path())
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    for root in [
+        data_root.attachments_path(),
+        data_root.manuals_path(),
+        data_root.settings_path(),
+    ] {
+        estimated_bytes = estimated_bytes.saturating_add(directory_size(&root)?);
+    }
+    Ok(estimated_bytes)
+}
+
+fn required_archive_capacity(estimated_bytes: u64) -> u64 {
+    estimated_bytes.saturating_add((estimated_bytes / 20).max(MINIMUM_CAPACITY_MARGIN))
 }
 
 fn inspect_verified_archive(
@@ -511,7 +610,20 @@ fn publish_archive(
             .unwrap_or("backup.faqbackup"),
         Uuid::now_v7()
     ));
-    fs::copy(local_archive, &partial).map_err(|_| backup_write_error())?;
+    if fs::copy(local_archive, &partial).is_err() {
+        let _ = fs::remove_file(&partial);
+        return Err(backup_write_error());
+    }
+    if OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&partial)
+        .and_then(|file| file.sync_all())
+        .is_err()
+    {
+        let _ = fs::remove_file(&partial);
+        return Err(backup_write_error());
+    }
     let expected_size = fs::metadata(local_archive)
         .map_err(|_| backup_read_error())?
         .len();
@@ -614,7 +726,12 @@ fn rollback_directories(swapped: &[(PathBuf, PathBuf)], staging: &Path) {
     }
 }
 
-fn validate_destination(destination: &Path, display_name: &str, overwrite: bool) -> AppResult<()> {
+fn validate_destination(
+    destination: &Path,
+    display_name: &str,
+    overwrite: bool,
+    required_bytes: u64,
+) -> AppResult<()> {
     validate_backup_path(destination)?;
     validate_backup_name(display_name)?;
     let parent = destination.parent().ok_or_else(backup_write_error)?;
@@ -630,6 +747,72 @@ fn validate_destination(destination: &Path, display_name: &str, overwrite: bool)
     }
     if destination.exists() && !overwrite {
         return Err(existing_backup_error());
+    }
+    verify_destination_write(parent)?;
+    validate_available_capacity(parent, required_bytes)?;
+    Ok(())
+}
+
+fn verify_destination_write(parent: &Path) -> AppResult<()> {
+    let probe = parent.join(format!(
+        ".knowledgeapp-backup-write-test-{}.tmp",
+        Uuid::now_v7()
+    ));
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&probe)
+            .map_err(|_| backup_write_error())?;
+        file.write_all(b"knowledge-app-backup-write-test")
+            .map_err(|_| backup_write_error())?;
+        file.sync_all().map_err(|_| backup_write_error())
+    })();
+    let cleanup_result = if probe.exists() {
+        fs::remove_file(&probe).map_err(|_| backup_write_error())
+    } else {
+        Ok(())
+    };
+    result.and(cleanup_result)
+}
+
+fn validate_available_capacity(path: &Path, required_bytes: u64) -> AppResult<()> {
+    let query_path = filesystem_query_path(path);
+    let available = available_space(&query_path).map_err(|error| {
+        AppError::new(
+            "BK-003",
+            format!("バックアップ先の空き容量を確認できませんでした（{error}）。"),
+            "ネットワーク接続と保存先の権限を確認するか、別の保存先を選択してください。",
+        )
+    })?;
+    validate_capacity_values(available, required_bytes)
+}
+
+fn filesystem_query_path(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let display = path.as_os_str().to_string_lossy();
+        if let Some(rest) = display.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{rest}"));
+        }
+        if let Some(rest) = display.strip_prefix(r"\\?\") {
+            return PathBuf::from(rest);
+        }
+    }
+    path.to_path_buf()
+}
+
+fn validate_capacity_values(available_bytes: u64, required_bytes: u64) -> AppResult<()> {
+    if available_bytes < required_bytes {
+        return Err(AppError::new(
+            "BK-010",
+            format!(
+                "バックアップ先の空き容量が不足しています（必要約{} MB、空き約{} MB）。",
+                required_bytes.div_ceil(1024 * 1024),
+                available_bytes / (1024 * 1024)
+            ),
+            "不要なファイルを整理するか、十分な空き容量がある別の保存先を選択してください。",
+        ));
     }
     Ok(())
 }
@@ -871,6 +1054,7 @@ fn restore_error(message: &str) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::{HistoryTarget, ListSearchLogsInput, ListViewLogsInput, SearchScope};
     use crate::repositories::database::ArticleRecord;
     use serde_json::json;
 
@@ -897,6 +1081,12 @@ mod tests {
                 is_hidden: false,
                 attachments: &[],
             })
+            .unwrap();
+        let search_log_id = database
+            .record_search_log("画面 暗い", Some(&category.id), SearchScope::Current, 1)
+            .unwrap();
+        database
+            .record_article_view(&article_id, Some(&search_log_id))
             .unwrap();
         fs::write(
             root.settings_path().join("window.json"),
@@ -928,10 +1118,34 @@ mod tests {
     }
 
     #[test]
+    fn creates_a_verified_safety_backup_before_csv_import() {
+        let (_directory, root, database) = test_data();
+
+        let destination = create_csv_import_safety_backup(&root, &database).unwrap();
+        let inspected = inspect_backup(&root, &destination).unwrap();
+
+        assert!(destination.starts_with(root.safety_backups_path()));
+        assert!(destination.is_file());
+        assert!(
+            inspected
+                .display_name
+                .starts_with("KnowledgeApp_before_csv_import_")
+        );
+        assert_eq!(inspected.counts.categories, 1);
+        assert_eq!(inspected.counts.articles, 1);
+    }
+
+    #[test]
     fn restores_database_and_keeps_a_safety_backup() {
         let (directory, root, mut database) = test_data();
         let destination = directory.path().join("restore-source.faqbackup");
         create_full_backup(&root, &database, &destination, "restore-source", false).unwrap();
+        database
+            .delete_history(HistoryTarget::Search, None, None, true)
+            .unwrap();
+        database
+            .delete_history(HistoryTarget::View, None, None, true)
+            .unwrap();
         database
             .create_category("復元後に消える分類", None)
             .unwrap();
@@ -942,6 +1156,31 @@ mod tests {
         let result = restore_backup(&root, &mut database, &destination).unwrap();
 
         assert_eq!(database.list_categories().unwrap().len(), 1);
+        assert_eq!(
+            database
+                .list_search_logs(&ListSearchLogsInput {
+                    query: String::new(),
+                    start_date: None,
+                    end_date: None,
+                    zero_results_only: false,
+                    page: 1,
+                })
+                .unwrap()
+                .total,
+            1
+        );
+        assert_eq!(
+            database
+                .list_view_logs(&ListViewLogsInput {
+                    query: String::new(),
+                    start_date: None,
+                    end_date: None,
+                    page: 1,
+                })
+                .unwrap()
+                .total,
+            1
+        );
         assert!(Path::new(&result.safety_backup_path).is_file());
         assert_eq!(
             fs::read(root.settings_path().join("window.json")).unwrap(),
@@ -995,5 +1234,140 @@ mod tests {
         assert_eq!(error.code, "BK-006");
         assert_eq!(database.list_categories().unwrap().len(), 1);
         assert!(!root.safety_backups_path().read_dir().unwrap().any(|_| true));
+    }
+
+    #[test]
+    fn creates_a_verified_backup_before_each_supported_schema_upgrade() {
+        let migrations = [
+            include_str!("../../migrations/0002_article_display_flags.sql"),
+            include_str!("../../migrations/0003_codex_proposals.sql"),
+            include_str!("../../migrations/0004_codex_delegation_history.sql"),
+            include_str!("../../migrations/0005_article_merge_relations.sql"),
+            include_str!("../../migrations/0006_users_and_article_audit.sql"),
+        ];
+
+        for source_version in 1..=6 {
+            let directory = tempfile::tempdir().unwrap();
+            let root = DataRootService::initialize(directory.path().join("app-data"), &[]).unwrap();
+            let connection = rusqlite::Connection::open(root.database_path()).unwrap();
+            connection
+                .execute_batch(include_str!("../../migrations/0001_initial.sql"))
+                .unwrap();
+            for migration in migrations.iter().take((source_version - 1) as usize) {
+                connection.execute_batch(migration).unwrap();
+            }
+            connection
+                .execute(
+                    "INSERT INTO categories(id, name, normalized_name, depth, sort_order, created_at, updated_at) VALUES ('cat', '移行前分類', '移行前分類', 1, 0, '2026-08-16T00:00:00Z', '2026-08-16T00:00:00Z')",
+                    [],
+                )
+                .unwrap();
+            drop(connection);
+
+            let backup_path = create_pre_migration_backup_if_needed(&root)
+                .unwrap()
+                .expect("an old schema must be backed up");
+            let preview = inspect_backup(&root, &backup_path).unwrap();
+            assert_eq!(preview.schema_version, source_version);
+            assert_eq!(preview.counts.categories, 1);
+
+            let migrated = Database::open(&root.database_path()).unwrap();
+            assert_eq!(migrated.schema_version().unwrap(), CURRENT_SCHEMA_VERSION);
+            assert_eq!(migrated.list_categories().unwrap()[0].name, "移行前分類");
+            assert!(backup_path.is_file());
+        }
+    }
+
+    #[test]
+    fn does_not_create_a_migration_backup_for_the_current_schema() {
+        let (_directory, root, _database) = test_data();
+
+        let result = create_pre_migration_backup_if_needed(&root).unwrap();
+
+        assert!(result.is_none());
+        assert!(!root.safety_backups_path().read_dir().unwrap().any(|_| true));
+    }
+
+    #[test]
+    fn stops_before_migration_when_the_safety_backup_cannot_be_written() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = DataRootService::initialize(directory.path().join("app-data"), &[]).unwrap();
+        let connection = rusqlite::Connection::open(root.database_path()).unwrap();
+        connection
+            .execute_batch(include_str!("../../migrations/0001_initial.sql"))
+            .unwrap();
+        drop(connection);
+        fs::remove_dir(root.safety_backups_path()).unwrap();
+        fs::write(root.safety_backups_path(), b"not-a-directory").unwrap();
+
+        let error = create_pre_migration_backup_if_needed(&root).unwrap_err();
+
+        assert_eq!(error.code, "BK-003");
+        let connection = rusqlite::Connection::open(root.database_path()).unwrap();
+        let version: i64 = connection
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, 1);
+    }
+
+    #[test]
+    fn a_failed_migration_keeps_the_previous_version_and_verified_backup() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = DataRootService::initialize(directory.path().join("app-data"), &[]).unwrap();
+        let connection = rusqlite::Connection::open(root.database_path()).unwrap();
+        connection
+            .execute_batch(include_str!("../../migrations/0001_initial.sql"))
+            .unwrap();
+        for migration in [
+            include_str!("../../migrations/0002_article_display_flags.sql"),
+            include_str!("../../migrations/0003_codex_proposals.sql"),
+            include_str!("../../migrations/0004_codex_delegation_history.sql"),
+        ] {
+            connection.execute_batch(migration).unwrap();
+        }
+        connection
+            .execute("CREATE TABLE article_merge_relations(unexpected TEXT)", [])
+            .unwrap();
+        drop(connection);
+
+        let backup_path = create_pre_migration_backup_if_needed(&root)
+            .unwrap()
+            .expect("version four must be backed up");
+        let error = match Database::open(&root.database_path()) {
+            Ok(_) => panic!("the intentionally conflicting migration must fail"),
+            Err(error) => error,
+        };
+
+        assert!(error.message.contains("統合関係"));
+        assert_eq!(
+            inspect_backup(&root, &backup_path).unwrap().schema_version,
+            4
+        );
+        let connection = rusqlite::Connection::open(root.database_path()).unwrap();
+        let version: i64 = connection
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, 4);
+    }
+
+    #[test]
+    fn backup_preflight_removes_its_write_probe() {
+        let directory = tempfile::tempdir().unwrap();
+
+        verify_destination_write(directory.path()).unwrap();
+
+        assert!(!directory.path().read_dir().unwrap().any(|_| true));
+    }
+
+    #[test]
+    fn backup_preflight_reports_insufficient_capacity() {
+        let error = validate_capacity_values(1024, 2048).unwrap_err();
+
+        assert_eq!(error.code, "BK-010");
+        assert!(error.message.contains("空き容量"));
     }
 }

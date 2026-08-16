@@ -1,3 +1,5 @@
+BEGIN IMMEDIATE;
+
 CREATE TABLE article_merge_relations (
     source_article_id TEXT PRIMARY KEY,
     target_article_id TEXT NOT NULL,
@@ -13,3 +15,5 @@ CREATE INDEX idx_article_merge_relations_target
 
 INSERT INTO schema_migrations(version, applied_at)
 VALUES (5, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+
+COMMIT;

@@ -1,0 +1,14 @@
+.synonyms-page { width: min(1120px, calc(100% - 48px)); }
+.synonym-workspace { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 18px; align-items: start; }
+.synonym-list-panel, .synonym-editor-panel { padding: 20px; }
+.synonym-list-panel > label, .synonym-editor-panel > label { display: block; margin-bottom: 7px; color: var(--text-secondary); font-size: 12px; font-weight: 800; }
+.synonym-list-panel nav { display: grid; gap: 6px; max-height: 580px; margin-top: 14px; overflow: auto; }
+.synonym-list-panel nav button { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 48px; padding: 9px 11px; color: var(--text-secondary); background: transparent; border: 1px solid var(--line-soft); border-radius: 9px; text-align: left; cursor: pointer; }
+.synonym-list-panel nav button:hover, .synonym-list-panel nav button.active { color: var(--green-dark); background: var(--green-soft); border-color: var(--primary-border-strong); }
+.synonym-list-panel nav small { color: var(--muted); font-size: 9px; }
+.synonym-list-panel nav p { color: var(--muted); font-size: 11px; }
+.synonym-editor-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; padding-bottom: 15px; border-bottom: 1px solid var(--line); }
+.synonym-editor-heading h2 { margin: 3px 0 0; font: 700 20px/1.4 var(--font-serif); }
+.synonym-editor-panel > .multi-value-field { margin-top: 20px; }
+.synonym-editor-actions { display: flex; justify-content: flex-end; margin-top: 22px; }
+@media (max-width: 760px) { .synonym-workspace { grid-template-columns: 1fr; } }

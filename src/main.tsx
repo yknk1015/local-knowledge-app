@@ -1,19 +1,26 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { HashRouter } from "react-router-dom";
+import { createHashRouter, RouterProvider } from "react-router-dom";
 import { App } from "./app/App";
 import { ColorThemeProvider } from "./app/ColorTheme";
 import { AuthProvider } from "./app/AuthContext";
 import "./styles/global.css";
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <HashRouter>
+const router = createHashRouter([
+  {
+    path: "*",
+    element: (
       <AuthProvider>
         <ColorThemeProvider>
           <App />
         </ColorThemeProvider>
       </AuthProvider>
-    </HashRouter>
+    ),
+  },
+]);
+
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <RouterProvider router={router} />
   </StrictMode>,
 );

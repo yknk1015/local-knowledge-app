@@ -5,9 +5,9 @@
 | 項目 | 内容 |
 |---|---|
 | 文書名 | ローカルFAQデータ・Git除外詳細設計書 |
-| 版 | 0.39（外部資料参照方針反映版） |
+| 版 | 0.41（リリース梱包・性能試験反映版） |
 | 作成日 | 2026-08-08 |
-| 上位文書 | `FAQシステム要件定義書.md` v1.28、`FAQシステム基本設計書.md` v1.36 |
+| 上位文書 | `FAQシステム要件定義書.md` v1.30、`FAQシステム基本設計書.md` v1.39 |
 | 対象 | 利用者が作成したFAQデータをGitHub等へ含めないための保存・検査設計 |
 
 ## 2. 目的
@@ -137,7 +137,7 @@ C:\Users\{Windowsユーザー}\AppData\Local\jp.local.webknowledgesystem\
 | `manuals` | 旧版バックアップ互換用の予約領域。現行画面からは追加せず、誤配置時のGit混入防止対象として維持する。 |
 | `logs` | 診断ログ |
 | `restore-staging` | 復元中の一時展開 |
-| `safety-backups` | 復元直前に自動作成するローカル安全バックアップ |
+| `safety-backups` | DB移行・復元・CSV取込の直前に自動作成するローカル安全バックアップ |
 | `settings` | DB外の端末設定 |
 | `temp` | FAQ保存前の一時画像など |
 | `codex-bridge` | FAQ本文を含まない分類カタログと、利用者が画面で選んだFAQだけを含む修正・統合用の明示委譲ファイル。 |
@@ -325,9 +325,12 @@ GitHub Actionsで次のタイミングに検査する。
 1. `scripts/check-text-encoding.ps1`を実行する。
 2. `scripts/check-no-runtime-data.ps1`を実行する。
 3. Gitで追跡されている全パスを検査する。
-4. Tauriのリソース設定に利用者データディレクトリが含まれていないことを確認する。
-5. ビルド後の配布フォルダにDB、バックアップ、エクスポート、添付画像、会社管理の外部資料がないことを確認する。
-6. 検出時はビルド・リリースを失敗させる。
+4. React・Rustテスト、型検査、Rust整形、Clippyを実行する。
+5. `npm run tauri build`でNSISインストーラーを生成する。
+6. `scripts/check-release-bundle-config.ps1`でNSIS、利用者単位、空の`resources`、外部バイナリーなし、現行版インストーラー1件を検査する。
+7. `scripts/check-no-runtime-data.ps1 -ReleaseDirectory`で、ビルド後の配布フォルダにDB、バックアップ、エクスポート、添付画像、会社管理の外部資料がないことを確認する。
+8. インストーラーのSHA-256を記録し、CI成果物として保存する。
+9. 検出時はビルド・リリースを失敗させる。
 
 CIは`.gitignore`を再確認するのではなく、実際にGitで追跡されているファイルを検査する。
 
@@ -335,7 +338,7 @@ CIは`.gitignore`を再確認するのではなく、実際にGitで追跡され
 
 ### 9.1 許可リスト方式
 
-Tauriの`bundle.resources`は、ソースに含まれる静的リソースだけを明示列挙する。
+現行版はTauriの`bundle.resources`を空配列とし、実行時の利用者データや会社管理資料を追加リソースとして梱包しない。Reactのビルドへ含める画面用素材はソース管理された静的UI素材だけに限定し、`externalBin`も設定しない。
 
 許可候補：
 
@@ -355,6 +358,8 @@ Tauriの`bundle.resources`は、ソースに含まれる静的リソースだけ
 
 ### 9.2 リリース前確認
 
+- `scripts/check-release-bundle-config.ps1`で配布設定と現行版NSIS成果物を検査する。
+- `scripts/check-no-runtime-data.ps1 -ReleaseDirectory`で配布フォルダ全体を検査する。
 - インストーラーを新しいWindows利用者環境へ導入する。
 - 初回起動時に空のDBが利用者データフォルダへ作成されることを確認する。
 - インストールフォルダにFAQデータが存在しないことを確認する。
@@ -370,6 +375,8 @@ Tauriの`bundle.resources`は、ソースに含まれる静的リソースだけ
 - リポジトリ配下へ誤保存しても、`.gitignore`と検査スクリプトがGit登録を防ぐ。
 - 復元前の安全バックアップは利用者データルート内の`safety-backups`へ作成し、フルバックアップへ再帰的に含めない。
 - CSV取込前も`safety-backups`へ完全バックアップを作成する。取込成功・失敗にかかわらず、利用者が明示的に整理するまで安全バックアップを保持する。
+- 既存DBの版が現行版より古い場合も、DBを書込み可能で開く前に`safety-backups`へ`KnowledgeApp_before_migration_v{旧版}_to_v{新版}_{日時}.faqbackup`を作成する。検証完了前にマイグレーションを始めず、失敗時は旧DBを変更しない。
+- 自動安全バックアップの保存先を、利用者が選んだ「前回成功したバックアップ先」として`settings/backup.json`へ記録しない。
 
 ### 10.1 Codexによる新規FAQ下書き時の取扱い
 
@@ -495,6 +502,8 @@ GitHub等へpushした場合、通常の削除コミットだけでは履歴に�
 | コミット前検査 | 完了 | `scripts/check-no-runtime-data.ps1`と`.githooks/pre-commit`を実装し、強制追加の拒否を確認した。 |
 | 文字コード検査 | 完了 | `.gitattributes`、`.editorconfig`、`scripts/check-text-encoding.ps1`を追加し、UTF-8違反、BOM、置換文字、NUL文字、LF以外の改行をpre-commitとCIで拒否する。 |
 | CI検査 | 実装完了・GitHub実行待ち | `.github/workflows/quality.yml`で追跡ファイル、テスト、ビルド、配布物を検査する。 |
+| NSIS配布検査 | 完了 | CIとローカルで利用者単位NSISを生成し、空の`resources`、外部バイナリーなし、現行版成果物、配布フォルダへの利用者データ混入を検査する。SHA-256を成果物情報として記録する。 |
+| リリース性能試験 | 完了 | OS一時フォルダへFAQ 10,000件、分類1,000件、履歴100万件を生成し、検索、詳細、履歴ページング、CSV、DBバックアップをリリースモードで計測する。生成データと成果物はリポジトリ・配布物へ含めない。 |
 | 空DB作成 | 完了 | Windows実行ファイルを起動し、利用者別フォルダへの作成を確認した。 |
 | 最小FAQ保存 | 完了 | OS一時フォルダを使うDB結合テストで、保存、再オープン、一覧取得を確認した。 |
 | リリース混入検査 | 完了 | リリースビルド後のフォルダにDB、バックアップ、エクスポートがないことを確認した。 |
@@ -544,8 +553,8 @@ GitHub等へpushした場合、通常の削除コミットだけでは履歴に�
 ## 16. 参照資料
 
 - `AGENTS.md`
-- `FAQシステム要件定義書.md` v1.28
-- `FAQシステム基本設計書.md` v1.36
+- `FAQシステム要件定義書.md` v1.30
+- `FAQシステム基本設計書.md` v1.39
 - [Tauri 2：appLocalDataDir](https://v2.tauri.app/reference/javascript/api/namespacepath/#applocaldatadir)
 - [Tauri 2：ファイルシステム](https://v2.tauri.app/plugin/file-system/)
 - [Git：gitignore](https://git-scm.com/docs/gitignore)

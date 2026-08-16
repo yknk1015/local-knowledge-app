@@ -7,16 +7,37 @@ import { StatusBadge } from "../components/StatusBadge";
 import { ArticleDisplayBadges } from "../components/ArticleDisplayBadges";
 import type { AppError, Article, CodexDelegationResult } from "../types/domain";
 
+function DetailValueList({ title, values }: { title: string; values: string[] }) {
+  if (values.length === 0) return null;
+  return (
+    <div className="detail-value-group">
+      <h3>{title}</h3>
+      <ul>{values.map((value) => <li key={value}>{value}</li>)}</ul>
+    </div>
+  );
+}
+
+function relatedStatus(article: Article["relatedArticles"][number]): string {
+  if (article.deletedAt) return "削除済み";
+  if (article.isMerged) return "統合済み";
+  if (article.status === "published") return "公開";
+  if (article.status === "archived") return "廃止";
+  return "下書き";
+}
+
 export function ArticleDetailPage() {
   const { articleId = "" } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const locationState = location.state as { returnTo?: unknown; notice?: unknown } | null;
+  const locationState = location.state as { returnTo?: unknown; notice?: unknown; sourceSearchLogId?: unknown } | null;
   const returnTo = typeof locationState?.returnTo === "string"
     && /^\/search(?:\?|$)/.test(locationState.returnTo)
     ? locationState.returnTo
     : "/search";
   const initialNotice = typeof locationState?.notice === "string" ? locationState.notice : null;
+  const sourceSearchLogId = typeof locationState?.sourceSearchLogId === "string"
+    ? locationState.sourceSearchLogId
+    : undefined;
   const [article, setArticle] = useState<Article | null>(null);
   const [error, setError] = useState<AppError | null>(null);
   const [loading, setLoading] = useState(true);
@@ -28,19 +49,31 @@ export function ArticleDetailPage() {
     setLoading(true);
     setError(null);
     try {
-      setArticle(await knowledgeApi.getArticle(articleId));
+      const loadedArticle = await knowledgeApi.getArticle(articleId);
+      setArticle(loadedArticle);
+      await knowledgeApi.recordArticleView(articleId, sourceSearchLogId);
     } catch (caught) {
       setError(toAppError(caught));
     } finally {
       setLoading(false);
     }
-  }, [articleId]);
+  }, [articleId, sourceSearchLogId]);
 
   useEffect(() => { void load(); }, [load]);
 
   if (loading) return <div className="page"><LoadingState label="FAQを開いています…" /></div>;
-  if (error) return <div className="page"><ErrorState error={error} onRetry={() => void load()} /></div>;
+  if (error && !article) return <div className="page"><ErrorState error={error} onRetry={() => void load()} /></div>;
   if (!article) return null;
+
+  const hasSearchDetails = [
+    article.symptoms,
+    article.causes,
+    article.targets,
+    article.errorCodes,
+    article.procedures,
+    article.cautions,
+    article.tags,
+  ].some((values) => values.length > 0);
 
   const deleteArticle = async () => {
     if (!window.confirm(`「${article.title}」を削除済みに移動しますか？\n通常の検索には表示されなくなりますが、あとから復元できます。`)) return;
@@ -221,6 +254,35 @@ export function ArticleDetailPage() {
           }))}
         />
       </section>
+      {hasSearchDetails && (
+        <section className="detail-information-section" aria-labelledby="detail-information-title">
+          <h2 id="detail-information-title">確認情報</h2>
+          <div className="detail-information-grid">
+            <DetailValueList title="症状" values={article.symptoms} />
+            <DetailValueList title="想定原因" values={article.causes} />
+            <DetailValueList title="対象OS・製品・機種" values={article.targets} />
+            <DetailValueList title="エラーコード" values={article.errorCodes} />
+            <DetailValueList title="対応手順" values={article.procedures} />
+            <DetailValueList title="注意事項" values={article.cautions} />
+            <DetailValueList title="タグ" values={article.tags} />
+          </div>
+        </section>
+      )}
+      {article.relatedArticles.length > 0 && (
+        <nav className="detail-related-section" aria-labelledby="detail-related-title">
+          <h2 id="detail-related-title">関連FAQ</h2>
+          <ul>
+            {article.relatedArticles.map((related) => (
+              <li key={related.id}>
+                <Link to={`/articles/${related.id}`}>
+                  <span>{related.title}</span>
+                  <small>{relatedStatus(related)}</small>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </nav>
+      )}
       <aside className="detail-safety-note">
         <strong>作業前にご確認ください</strong>
         <p>会社のPCやネットワークを変更する場合は、所属先の運用ルールを優先してください。</p>

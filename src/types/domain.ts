@@ -120,6 +120,8 @@ export interface ArticleListItem {
   updatedBadgeUntil: string | null;
   isHidden: boolean;
   updatedAt: string;
+  tags?: string[];
+  matchReasons?: string[];
 }
 
 export interface Article extends ArticleListItem {
@@ -133,6 +135,30 @@ export interface Article extends ArticleListItem {
   deletedAt: string | null;
   mergeInfo: ArticleMergeInfo | null;
   attachments: ArticleAttachment[];
+  symptoms: string[];
+  causes: string[];
+  targets: string[];
+  errorCodes: string[];
+  procedures: string[];
+  cautions: string[];
+  tags: string[];
+  searchTerms: string[];
+  relatedArticles: RelatedArticleSummary[];
+}
+
+export interface RelatedArticleSummary {
+  id: string;
+  title: string;
+  status: ArticleStatus;
+  deletedAt: string | null;
+  isMerged: boolean;
+}
+
+export interface RelatedArticleCandidate {
+  id: string;
+  title: string;
+  status: ArticleStatus;
+  isRelated: boolean;
 }
 
 export interface ArticleMergeInfo {
@@ -173,13 +199,24 @@ export interface SaveArticleInput {
   newBadgeUntil: string | null;
   updatedBadgeUntil: string | null;
   isHidden: boolean;
+  symptoms: string[];
+  causes: string[];
+  targets: string[];
+  errorCodes: string[];
+  procedures: string[];
+  cautions: string[];
+  tags: string[];
+  searchTerms: string[];
+  relatedArticleIds: string[];
 }
 
 export type SearchSort = "updatedDesc" | "updatedAsc" | "importanceDesc" | "importanceAsc";
+export type SearchScope = "descendants" | "current" | "all";
 
 export interface SearchArticlesInput {
   query: string;
   categoryId?: string;
+  scope: SearchScope;
   includeDrafts: boolean;
   page: number;
   sort: SearchSort;
@@ -187,6 +224,45 @@ export interface SearchArticlesInput {
 
 export interface SearchArticlePage {
   items: ArticleListItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface SynonymGroup {
+  id: string;
+  displayName: string;
+  terms: string[];
+  updatedAt: string;
+}
+
+export interface SearchLogItem {
+  id: string;
+  queryText: string;
+  normalizedQuery: string;
+  scope: SearchScope;
+  categoryName: string | null;
+  resultCount: number;
+  createdAt: string;
+}
+
+export interface SearchLogPage {
+  items: SearchLogItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface ViewLogItem {
+  id: string;
+  articleId: string;
+  articleTitle: string;
+  sourceQueryText: string | null;
+  viewedAt: string;
+}
+
+export interface ViewLogPage {
+  items: ViewLogItem[];
   total: number;
   page: number;
   pageSize: number;
@@ -243,6 +319,39 @@ export interface CsvImportPreview {
 }
 
 export interface CsvImportResult {
+  sourcePath: string;
+  safetyBackupPath: string;
+  createdCount: number;
+  updatedCount: number;
+  unchangedCount: number;
+}
+
+export interface JsonEntityCounts {
+  categories: number;
+  articles: number;
+  tags: number;
+  synonymGroups: number;
+  relations: number;
+  mergeRelations: number;
+}
+
+export interface JsonExportResult {
+  destinationPath: string;
+  counts: JsonEntityCounts;
+}
+
+export interface JsonImportPreview {
+  sourcePath: string;
+  fileSha256: string;
+  counts: JsonEntityCounts;
+  createCount: number;
+  updateCount: number;
+  unchangedCount: number;
+  errorCount: number;
+  errors: string[];
+}
+
+export interface JsonImportResult {
   sourcePath: string;
   safetyBackupPath: string;
   createdCount: number;

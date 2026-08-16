@@ -51,11 +51,27 @@ jobs:
       - name: Run Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked
 
-      - name: Build Windows application
-        run: npm run tauri build -- --no-bundle
+      - name: Build Windows NSIS installer
+        run: npm run tauri build
 
       - name: Verify built files contain no runtime data
         shell: pwsh
         run: |
           ./scripts/check-no-runtime-data.ps1 -ReleaseDirectory ./dist
           ./scripts/check-no-runtime-data.ps1 -ReleaseDirectory ./src-tauri/target/release
+          ./scripts/check-no-runtime-data.ps1 -ReleaseDirectory ./src-tauri/target/release/bundle
+          ./scripts/check-release-bundle-config.ps1 -InstallerDirectory ./src-tauri/target/release/bundle/nsis
+
+      - name: Record NSIS installer SHA-256
+        shell: pwsh
+        run: |
+          Get-ChildItem -LiteralPath ./src-tauri/target/release/bundle/nsis -Filter '*.exe' -File |
+            Get-FileHash -Algorithm SHA256 |
+            Format-Table -AutoSize
+
+      - name: Upload Windows NSIS installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: KnowledgeApp-Windows-NSIS-${{ github.sha }}
+          path: src-tauri/target/release/bundle/nsis/KnowledgeApp_0.3.3_*-setup.exe
+          if-no-files-found: error

@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { knowledgeApi } from "../api/knowledgeApi";
 import { ArticleEditorPage, getDefaultBadgeUntil } from "./ArticleEditorPage";
@@ -7,6 +7,16 @@ import { ArticleEditorPage, getDefaultBadgeUntil } from "./ArticleEditorPage";
 vi.mock("../components/RichTextEditor", () => ({
   RichTextEditor: () => <div aria-label="FAQの回答" />,
 }));
+
+function renderEditor(initialEntry = "/articles/new") {
+  const router = createMemoryRouter([
+    { path: "/articles/new", element: <ArticleEditorPage /> },
+    { path: "/articles/:articleId/edit", element: <ArticleEditorPage /> },
+    { path: "/articles/:articleId", element: <div>保存完了</div> },
+    { path: "/search", element: <div>検索画面</div> },
+  ], { initialEntries: [initialEntry] });
+  return { ...render(<RouterProvider router={router} />), router };
+}
 
 describe("ArticleEditorPage", () => {
   afterEach(() => vi.restoreAllMocks());
@@ -20,13 +30,7 @@ describe("ArticleEditorPage", () => {
       { id: "category-1", parentId: null, name: "操作全般", description: "", depth: 1, sortOrder: 0, articleCount: 0 },
     ]);
 
-    render(
-      <MemoryRouter initialEntries={["/articles/new"]}>
-        <Routes>
-          <Route path="/articles/new" element={<ArticleEditorPage />} />
-        </Routes>
-      </MemoryRouter>,
-    );
+    renderEditor();
 
     expect(await screen.findByText("安全のために、パスワードや秘密鍵、個人情報はFAQへ登録しないでください。")).toBeVisible();
     expect(screen.getByText("最初に結論を簡潔に示し、その後に手順や詳細を記載すると、読み手に伝わりやすくなります。")).toBeVisible();
@@ -38,13 +42,7 @@ describe("ArticleEditorPage", () => {
       { id: "category-1", parentId: null, name: "操作全般", description: "", depth: 1, sortOrder: 0, articleCount: 0 },
     ]);
 
-    render(
-      <MemoryRouter initialEntries={["/articles/new"]}>
-        <Routes>
-          <Route path="/articles/new" element={<ArticleEditorPage />} />
-        </Routes>
-      </MemoryRouter>,
-    );
+    renderEditor();
 
     const titleCard = (await screen.findByLabelText(/タイトル/)).closest(".basic-info-card");
     const categoryCard = screen.getByLabelText(/所属分類/).closest(".basic-info-card");
@@ -89,13 +87,7 @@ describe("ArticleEditorPage", () => {
       action: "URLを文字として保存する場合はリンク解除を押してください。",
     });
 
-    render(
-      <MemoryRouter initialEntries={["/articles/new"]}>
-        <Routes>
-          <Route path="/articles/new" element={<ArticleEditorPage />} />
-        </Routes>
-      </MemoryRouter>,
-    );
+    renderEditor();
 
     fireEvent.change(await screen.findByLabelText(/タイトル/), {
       target: { value: "アプリの起動方法" },
@@ -119,13 +111,7 @@ describe("ArticleEditorPage", () => {
     vi.spyOn(knowledgeApi, "listCategories").mockResolvedValue([
       { id: "category-1", parentId: null, name: "操作全般", description: "", depth: 1, sortOrder: 0, articleCount: 0 },
     ]);
-    render(
-      <MemoryRouter initialEntries={["/articles/new"]}>
-        <Routes>
-          <Route path="/articles/new" element={<ArticleEditorPage />} />
-        </Routes>
-      </MemoryRouter>,
-    );
+    renderEditor();
 
     await screen.findByLabelText(/タイトル/);
     fireEvent.click(screen.getByRole("checkbox", { name: /「新着」を表示する/ }));
@@ -141,13 +127,7 @@ describe("ArticleEditorPage", () => {
       { id: "category-1", parentId: null, name: "操作全般", description: "", depth: 1, sortOrder: 0, articleCount: 0 },
     ]);
 
-    render(
-      <MemoryRouter initialEntries={["/articles/new"]}>
-        <Routes>
-          <Route path="/articles/new" element={<ArticleEditorPage />} />
-        </Routes>
-      </MemoryRouter>,
-    );
+    renderEditor();
 
     await screen.findByLabelText(/タイトル/);
     const checkbox = screen.getByRole("checkbox", { name: /「新着」を表示する/ });
@@ -170,13 +150,7 @@ describe("ArticleEditorPage", () => {
     ]);
     const save = vi.spyOn(knowledgeApi, "saveArticle");
 
-    render(
-      <MemoryRouter initialEntries={["/articles/new"]}>
-        <Routes>
-          <Route path="/articles/new" element={<ArticleEditorPage />} />
-        </Routes>
-      </MemoryRouter>,
-    );
+    renderEditor();
 
     fireEvent.change(await screen.findByLabelText(/タイトル/), { target: { value: "新しいFAQ" } });
     fireEvent.change(screen.getByLabelText(/所属分類/), { target: { value: "category-1" } });
@@ -195,13 +169,7 @@ describe("ArticleEditorPage", () => {
       { id: "category-1", parentId: null, name: "操作全般", description: "", depth: 1, sortOrder: 0, articleCount: 0 },
     ]);
 
-    render(
-      <MemoryRouter initialEntries={["/articles/new"]}>
-        <Routes>
-          <Route path="/articles/new" element={<ArticleEditorPage />} />
-        </Routes>
-      </MemoryRouter>,
-    );
+    renderEditor();
 
     await screen.findByLabelText(/タイトル/);
     expect(screen.queryByText(/画像はこのPCのアプリ管理フォルダに保存されます/)).not.toBeInTheDocument();
@@ -219,13 +187,7 @@ describe("ArticleEditorPage", () => {
     ]);
     const save = vi.spyOn(knowledgeApi, "saveArticle");
 
-    render(
-      <MemoryRouter initialEntries={["/articles/new"]}>
-        <Routes>
-          <Route path="/articles/new" element={<ArticleEditorPage />} />
-        </Routes>
-      </MemoryRouter>,
-    );
+    renderEditor();
 
     fireEvent.change(await screen.findByLabelText(/タイトル/), { target: { value: "公開するFAQ" } });
     fireEvent.change(screen.getByLabelText(/所属分類/), { target: { value: "category-1" } });
@@ -252,13 +214,7 @@ describe("ArticleEditorPage", () => {
       action: "入力内容を確認してください。",
     });
 
-    render(
-      <MemoryRouter initialEntries={["/articles/new"]}>
-        <Routes>
-          <Route path="/articles/new" element={<ArticleEditorPage />} />
-        </Routes>
-      </MemoryRouter>,
-    );
+    renderEditor();
 
     fireEvent.change(await screen.findByLabelText(/タイトル/), { target: { value: "ショートカットで保存" } });
     fireEvent.change(screen.getByLabelText(/所属分類/), { target: { value: "category-1" } });
@@ -268,6 +224,56 @@ describe("ArticleEditorPage", () => {
       title: "ショートカットで保存",
       status: "draft",
     })));
+  });
+
+  it("saves multiple search values and a selected related FAQ", async () => {
+    vi.spyOn(knowledgeApi, "listCategories").mockResolvedValue([
+      { id: "category-1", parentId: null, name: "操作全般", description: "", depth: 1, sortOrder: 0, articleCount: 0 },
+    ]);
+    vi.spyOn(knowledgeApi, "searchRelatedArticles").mockResolvedValue([
+      { id: "related-1", title: "ネットワークを確認するには？", status: "published", isRelated: false },
+    ]);
+    const save = vi.spyOn(knowledgeApi, "saveArticle").mockRejectedValue({
+      code: "TEST-001",
+      message: "入力内容確認用の停止です。",
+      action: "テストを確認してください。",
+    });
+    renderEditor();
+
+    fireEvent.change(await screen.findByLabelText(/タイトル/), { target: { value: "画面が暗いときは？" } });
+    fireEvent.change(screen.getByLabelText(/所属分類/), { target: { value: "category-1" } });
+    const symptomInput = screen.getByLabelText("症状");
+    fireEvent.change(symptomInput, { target: { value: "画面が真っ暗" } });
+    fireEvent.keyDown(symptomInput, { key: "Enter" });
+    fireEvent.change(screen.getByLabelText("関連FAQを検索"), { target: { value: "ネットワーク" } });
+    fireEvent.click(await screen.findByRole("button", { name: "関連に追加" }));
+    fireEvent.click(screen.getByRole("button", { name: "下書きを保存" }));
+
+    await waitFor(() => expect(save).toHaveBeenCalledWith(expect.objectContaining({
+      symptoms: ["画面が真っ暗"],
+      relatedArticleIds: ["related-1"],
+    })));
+  });
+
+  it("warns before route navigation or window closing when changes are unsaved", async () => {
+    vi.spyOn(knowledgeApi, "listCategories").mockResolvedValue([
+      { id: "category-1", parentId: null, name: "操作全般", description: "", depth: 1, sortOrder: 0, articleCount: 0 },
+    ]);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const { router } = renderEditor();
+    fireEvent.change(await screen.findByLabelText(/タイトル/), { target: { value: "未保存のFAQ" } });
+
+    const beforeUnload = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(beforeUnload);
+    expect(beforeUnload.defaultPrevented).toBe(true);
+
+    fireEvent.click(screen.getByRole("link", { name: /編集をキャンセルして戻る/ }));
+    await waitFor(() => expect(confirm).toHaveBeenCalledWith(expect.stringContaining("保存していない変更")));
+    expect(router.state.location.pathname).toBe("/articles/new");
+
+    confirm.mockReturnValue(true);
+    fireEvent.click(screen.getByRole("link", { name: /編集をキャンセルして戻る/ }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/search"));
   });
 
   it("publishes a merged FAQ as new and then confirms marking its sources as merged", async () => {
@@ -298,6 +304,15 @@ describe("ArticleEditorPage", () => {
       deletedAt: null,
       mergeInfo: null,
       attachments: [],
+      symptoms: [],
+      causes: [],
+      targets: [],
+      errorCodes: [],
+      procedures: [],
+      cautions: [],
+      tags: [],
+      searchTerms: [],
+      relatedArticles: [],
     };
     vi.spyOn(knowledgeApi, "listCategories").mockResolvedValue([category]);
     vi.spyOn(knowledgeApi, "getArticle").mockResolvedValue(mergedDraft);
@@ -340,14 +355,7 @@ describe("ArticleEditorPage", () => {
     });
     vi.spyOn(window, "confirm").mockReturnValue(true);
 
-    render(
-      <MemoryRouter initialEntries={[`/articles/${mergedDraft.id}/edit`]}>
-        <Routes>
-          <Route path="/articles/:articleId/edit" element={<ArticleEditorPage />} />
-          <Route path="/articles/:articleId" element={<div>保存完了</div>} />
-        </Routes>
-      </MemoryRouter>,
-    );
+    renderEditor(`/articles/${mergedDraft.id}/edit`);
 
     expect(await screen.findByText("この下書きはCodexで統合したFAQです")).toBeVisible();
     fireEvent.click(screen.getByRole("radio", { name: /^公開/ }));

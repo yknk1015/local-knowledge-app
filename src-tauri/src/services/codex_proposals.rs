@@ -698,6 +698,15 @@ mod tests {
                 asset_path: "C:\\secret\\screen.png".into(),
                 created_at: updated_at.clone(),
             }],
+            symptoms: Vec::new(),
+            causes: Vec::new(),
+            targets: Vec::new(),
+            error_codes: Vec::new(),
+            procedures: Vec::new(),
+            cautions: Vec::new(),
+            tags: Vec::new(),
+            search_terms: Vec::new(),
+            related_articles: Vec::new(),
         };
         let category = Category {
             id: category_id,
@@ -715,6 +724,9 @@ mod tests {
         assert!(!delegation_json.contains("C:\\\\secret"));
         assert!(!delegation_json.contains("secret-hash"));
         assert!(!delegation_json.contains("bodyPlainText"));
+        assert!(!delegation_json.contains("password"));
+        assert!(!delegation_json.contains("createdByUser"));
+        assert!(!delegation_json.contains("updatedByUser"));
         let proposal = CodexFaqProposal {
             format_version: 2,
             request_id: Uuid::now_v7().to_string(),

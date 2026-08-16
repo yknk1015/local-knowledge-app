@@ -3,13 +3,18 @@ import type { ReactNode } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { knowledgeApi } from "../api/knowledgeApi";
+import { AuthProvider } from "../app/AuthContext";
 import { ColorThemeProvider } from "../app/ColorTheme";
 import type { ArticleListItem, SearchArticlePage } from "../types/domain";
 import { ArticleDetailPage } from "./ArticleDetailPage";
 import { SearchPage } from "./SearchPage";
 
 function renderWithSettings(children: ReactNode) {
-  return render(<ColorThemeProvider>{children}</ColorThemeProvider>);
+  return render(
+    <AuthProvider>
+      <ColorThemeProvider>{children}</ColorThemeProvider>
+    </AuthProvider>,
+  );
 }
 
 function searchPage(
@@ -38,12 +43,20 @@ function articleItem(id: string, title: string, categoryId = "cat", categoryName
 
 describe("SearchPage", () => {
   beforeEach(() => {
+    vi.spyOn(knowledgeApi, "getCurrentUser").mockResolvedValue({
+      id: "user-1",
+      loginId: "0000",
+      displayName: "初期管理者",
+      role: "admin",
+    });
     vi.spyOn(knowledgeApi, "getSettings").mockResolvedValue({
       colorTheme: "green",
       showTopCategoryInTitle: true,
       showMascot: true,
     });
     vi.spyOn(knowledgeApi, "saveSettings").mockImplementation(async (settings) => settings);
+    vi.spyOn(knowledgeApi, "recordSearchLog").mockResolvedValue("search-log-1");
+    vi.spyOn(knowledgeApi, "recordArticleView").mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -159,6 +172,12 @@ describe("SearchPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "検索" }));
     await waitFor(() => expect(search).toHaveBeenCalledTimes(2));
     expect(search).toHaveBeenLastCalledWith(expect.objectContaining({ query: "画面が真っ暗" }));
+    await waitFor(() => expect(knowledgeApi.recordSearchLog).toHaveBeenCalledWith(
+      "画面が真っ暗",
+      undefined,
+      "descendants",
+      0,
+    ));
   });
 
   it("filters by the selected category and explains that descendants are included", async () => {
@@ -181,6 +200,47 @@ describe("SearchPage", () => {
     expect(search).toHaveBeenLastCalledWith(expect.objectContaining({ categoryId: "windows" }));
     expect(screen.getAllByText("「Windows」以下")).toHaveLength(2);
     expect(screen.getByText("選んだ分類と、その配下にあるFAQを表示します。")).toBeInTheDocument();
+  });
+
+  it("switches the search scope between current, descendants, and all", async () => {
+    vi.spyOn(knowledgeApi, "listCategories").mockResolvedValue([
+      { id: "windows", parentId: null, name: "Windows", description: "", depth: 1, sortOrder: 0, articleCount: 1 },
+      { id: "display", parentId: "windows", name: "画面表示", description: "", depth: 2, sortOrder: 0, articleCount: 1 },
+    ]);
+    const search = vi.spyOn(knowledgeApi, "searchArticles").mockResolvedValue(searchPage([]));
+    renderWithSettings(<MemoryRouter><SearchPage /></MemoryRouter>);
+    await waitFor(() => expect(search).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "Windows" }));
+    await waitFor(() => expect(search).toHaveBeenLastCalledWith(expect.objectContaining({
+      categoryId: "windows",
+      scope: "descendants",
+    })));
+    fireEvent.change(screen.getByRole("combobox", { name: "検索範囲" }), { target: { value: "current" } });
+    await waitFor(() => expect(search).toHaveBeenLastCalledWith(expect.objectContaining({
+      categoryId: "windows",
+      scope: "current",
+    })));
+    expect(screen.getAllByText("「Windows」のみ")).toHaveLength(2);
+
+    fireEvent.change(screen.getByRole("combobox", { name: "検索範囲" }), { target: { value: "all" } });
+    await waitFor(() => expect(search).toHaveBeenLastCalledWith(expect.objectContaining({ scope: "all" })));
+    expect(screen.getAllByText("すべての分類").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("shows major tags and up to three match reasons", async () => {
+    vi.spyOn(knowledgeApi, "listCategories").mockResolvedValue([
+      { id: "cat", parentId: null, name: "Windows", description: "", depth: 1, sortOrder: 0, articleCount: 1 },
+    ]);
+    vi.spyOn(knowledgeApi, "searchArticles").mockResolvedValue(searchPage([{
+      ...articleItem("article", "画面が真っ暗になったとき"),
+      tags: ["ディスプレイ", "Windows"],
+      matchReasons: ["タイトル「画面」", "症状「真っ暗」"],
+    }]));
+    renderWithSettings(<MemoryRouter initialEntries={["/search?q=画面"]}><SearchPage /></MemoryRouter>);
+
+    expect(await screen.findByRole("list", { name: "主要タグ" })).toHaveTextContent("ディスプレイ");
+    expect(screen.getByText(/タイトル「画面」/)).toHaveTextContent("タイトル「画面」 ／ 症状「真っ暗」");
   });
 
   it("restores the keyword and results after opening an FAQ and returning to the list", async () => {
@@ -211,6 +271,15 @@ describe("SearchPage", () => {
       deletedAt: null,
       mergeInfo: null,
       attachments: [],
+      symptoms: [],
+      causes: [],
+      targets: [],
+      errorCodes: [],
+      procedures: [],
+      cautions: [],
+      tags: [],
+      searchTerms: [],
+      relatedArticles: [],
     };
     vi.spyOn(knowledgeApi, "listCategories").mockResolvedValue([category]);
     const search = vi.spyOn(knowledgeApi, "searchArticles").mockImplementation(async () => searchPage([article]));
@@ -259,6 +328,7 @@ describe("SearchPage", () => {
     await waitFor(() => expect(search).toHaveBeenLastCalledWith({
       query: "画面",
       categoryId: "windows",
+      scope: "descendants",
       includeDrafts: true,
       page: 1,
       sort: "updatedDesc",
@@ -272,6 +342,7 @@ describe("SearchPage", () => {
     await waitFor(() => expect(search).toHaveBeenLastCalledWith({
       query: "",
       categoryId: undefined,
+      scope: "descendants",
       includeDrafts: false,
       page: 1,
       sort: "updatedDesc",

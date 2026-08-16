@@ -17,6 +17,22 @@ if (-not $resolvedRoot.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCa
 }
 
 try {
+    $forbiddenDirectAccess = @(
+        'knowledge\.db',
+        '\.db-wal',
+        '\.db-shm',
+        '(?i)sqlite',
+        '(?i)Get-ChildItem'
+    )
+    foreach ($scriptFile in Get-ChildItem -LiteralPath $pluginScripts -Filter '*.ps1' -File) {
+        $scriptText = [IO.File]::ReadAllText($scriptFile.FullName)
+        foreach ($pattern in $forbiddenDirectAccess) {
+            if ($scriptText -match $pattern) {
+                throw ('CodexプラグインにDB・履歴・未選択FAQの直接探索につながる処理があります: ' + $scriptFile.Name)
+            }
+        }
+    }
+
     $faqRuleText = [IO.File]::ReadAllText($skillPath) + [IO.File]::ReadAllText($proposalFormatPath)
     foreach ($requiredText in @('画像・スクリーンショット', '著作権侵害', '挿入位置', '代替テキスト')) {
         if ($faqRuleText.IndexOf($requiredText, [StringComparison]::Ordinal) -lt 0) {
@@ -112,7 +128,7 @@ try {
         $savedProposal.faq.bodyDoc.content[0].content[0].text -ne 'テスト回答') {
         throw 'Codex提案の日本語UTF-8往復テストに失敗しました。'
     }
-    Write-Output 'OK: Codexプラグインのタイトル・画像利用ルール、分類取得、委譲取得、提案送信を確認しました。'
+    Write-Output 'OK: CodexプラグインのDB・未選択FAQ直接探索禁止、タイトル・画像利用ルール、分類取得、委譲取得、提案送信を確認しました。'
 }
 finally {
     Remove-Item Env:\KNOWLEDGEAPP_PLUGIN_TEST_MODE -ErrorAction SilentlyContinue

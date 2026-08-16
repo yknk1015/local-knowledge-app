@@ -11,6 +11,7 @@ import {
 } from "react";
 import { knowledgeApi } from "../api/knowledgeApi";
 import type { AppSettings, ColorTheme } from "../types/domain";
+import { useAuth } from "./AuthContext";
 
 interface ColorThemeContextValue {
   colorTheme: ColorTheme;
@@ -29,11 +30,18 @@ const DEFAULT_SETTINGS: AppSettings = {
 };
 
 export function ColorThemeProvider({ children }: { children: ReactNode }) {
+  const { user } = useAuth();
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const settingsRef = useRef(settings);
   const hasUserUpdated = useRef(false);
 
   useEffect(() => {
+    hasUserUpdated.current = false;
+    if (!user) {
+      settingsRef.current = DEFAULT_SETTINGS;
+      setSettings(DEFAULT_SETTINGS);
+      return;
+    }
     let active = true;
     knowledgeApi.getSettings()
       .then((loadedSettings) => {
@@ -51,7 +59,7 @@ export function ColorThemeProvider({ children }: { children: ReactNode }) {
     return () => {
       active = false;
     };
-  }, []);
+  }, [user?.id]);
 
   useLayoutEffect(() => {
     document.documentElement.dataset.colorTheme = settings.colorTheme;

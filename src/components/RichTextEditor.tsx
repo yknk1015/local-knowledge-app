@@ -247,10 +247,25 @@ export function dehydrateManagedImages(value: Record<string, unknown>): Record<s
 
 export function stripLinksFromPastedHtml(html: string): string {
   const pastedDocument = new DOMParser().parseFromString(html, "text/html");
+  pastedDocument
+    .querySelectorAll(
+      "script, style, iframe, object, embed, link, meta, base, form, input, button, textarea, select, video, audio, source, svg, math",
+    )
+    .forEach((element) => element.remove());
   pastedDocument.querySelectorAll("a").forEach((anchor) => {
     anchor.replaceWith(...Array.from(anchor.childNodes));
   });
   pastedDocument.querySelectorAll("img").forEach((image) => image.remove());
+  pastedDocument.querySelectorAll("*").forEach((element) => {
+    for (const attribute of Array.from(element.attributes)) {
+      if (
+        attribute.name.toLowerCase().startsWith("on")
+        || ["style", "srcdoc"].includes(attribute.name.toLowerCase())
+      ) {
+        element.removeAttribute(attribute.name);
+      }
+    }
+  });
   return pastedDocument.body.innerHTML;
 }
 

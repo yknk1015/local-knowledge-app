@@ -16,6 +16,7 @@ describe("FaqMascot", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("クリックされるまでは静止画のまま動かない", () => {
@@ -110,6 +111,31 @@ describe("FaqMascot", () => {
 
     advanceAnimation([220, 220, 280, 520, 520, 320, 240, 260]);
     expect(mascot).toHaveAttribute("data-animation", "still");
+  });
+
+  it("動きを減らす設定では長い連続モーションを600msで静止させる", () => {
+    const mediaQuery = {
+      matches: true,
+      media: "(prefers-reduced-motion: reduce)",
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    } as unknown as MediaQueryList;
+    vi.stubGlobal("matchMedia", vi.fn(() => mediaQuery));
+    vi.spyOn(Math, "random").mockReturnValue(0.999);
+    render(<FaqMascot />);
+
+    const mascot = screen.getByRole("button");
+    fireEvent.click(mascot);
+    expect(mascot).toHaveAttribute("data-animation", "friend-arrives");
+
+    act(() => vi.advanceTimersByTime(599));
+    expect(mascot).toHaveAttribute("data-animation", "friend-arrives");
+    act(() => vi.advanceTimersByTime(1));
+    expect(mascot).toHaveAttribute("data-animation", "still-with-mugi");
   });
 
   it("右クリックメニューから非表示を依頼できる", async () => {

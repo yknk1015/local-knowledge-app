@@ -89,6 +89,23 @@ describe("ArticleManagementPage", () => {
     expect(await screen.findByText("「画面が暗い」を復元しました。")).toBeInTheDocument();
   });
 
+  it("duplicates an active FAQ as a new draft and opens its editor", async () => {
+    mocks.listArticlesForManagement.mockResolvedValue({ items: [article], total: 1, page: 1, pageSize: 50 });
+    mocks.duplicateArticle.mockResolvedValue({
+      ...article,
+      id: "article-copy",
+      title: "画面が暗い（コピー）",
+      status: "draft",
+    });
+    render(<MemoryRouter initialEntries={["/manage"]}><ArticleManagementPage /></MemoryRouter>);
+
+    await screen.findByText("画面が暗い");
+    fireEvent.click(screen.getByRole("button", { name: "「画面が暗い」のその他の操作" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "複製" }));
+
+    await waitFor(() => expect(mocks.duplicateArticle).toHaveBeenCalledWith("article-1"));
+  });
+
   it("delegates two selected FAQs to Codex for a non-destructive merge", async () => {
     const second = { ...article, id: "article-2", title: "画面が明るすぎる" };
     mocks.listArticlesForManagement.mockResolvedValue({ items: [article, second], total: 2, page: 1, pageSize: 50 });

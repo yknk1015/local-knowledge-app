@@ -37,6 +37,18 @@ describe("stripLinksFromPastedHtml", () => {
     expect(stripLinksFromPastedHtml('<p>説明</p><img src="https://example.com/a.png">'))
       .toBe("<p>説明</p>");
   });
+
+  it("removes executable HTML and event or style attributes from pasted content", () => {
+    const result = stripLinksFromPastedHtml(
+      '<script>alert(1)</script><iframe src="https://example.com"></iframe><p onclick="run()" style="background:url(https://example.com/a.png)">安全な説明</p><svg onload="run()"></svg>',
+    );
+
+    expect(result).toBe("<p>安全な説明</p>");
+    expect(result).not.toContain("script");
+    expect(result).not.toContain("iframe");
+    expect(result).not.toContain("onload");
+    expect(result).not.toContain("style");
+  });
 });
 
 describe("managed FAQ images", () => {

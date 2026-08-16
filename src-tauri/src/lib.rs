@@ -10,6 +10,7 @@ use models::AuthenticatedUser;
 use repositories::database::Database;
 use services::data_root::{DataRootService, find_git_root};
 use tauri::{Manager, Runtime};
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 pub struct AppState {
     data_root: DataRootService,
@@ -19,6 +20,13 @@ pub struct AppState {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -29,7 +37,20 @@ pub fn run() {
             let forbidden_roots = forbidden_roots(app);
             let data_root = DataRootService::initialize(app_data_dir, &forbidden_roots)?;
             services::attachments::cleanup_stale_stages(&data_root);
-            let database = Database::open(&data_root.database_path())?;
+            let database = match (|| {
+                services::backup::create_pre_migration_backup_if_needed(&data_root)?;
+                Database::open(&data_root.database_path())
+            })() {
+                Ok(database) => database,
+                Err(error) => {
+                    app.dialog()
+                        .message(format!("{}\n\n対処: {}", error.message, error.action))
+                        .title("KnowledgeAppを起動できません")
+                        .kind(MessageDialogKind::Error)
+                        .blocking_show();
+                    return Err(error.into());
+                }
+            };
             let categories = database.list_categories()?;
             services::codex_proposals::write_category_catalog(&data_root, &categories)?;
             app.manage(AppState {
@@ -55,6 +76,7 @@ pub fn run() {
             commands::list_categories,
             commands::create_category,
             commands::update_category,
+            commands::reorder_category,
             commands::delete_category,
             commands::list_codex_proposals,
             commands::accept_codex_proposal,
@@ -66,6 +88,15 @@ pub fn run() {
             commands::mark_codex_merge_sources,
             commands::clear_article_merge,
             commands::search_articles,
+            commands::record_search_log,
+            commands::record_article_view,
+            commands::list_search_logs,
+            commands::list_view_logs,
+            commands::delete_history,
+            commands::list_synonym_groups,
+            commands::save_synonym_group,
+            commands::delete_synonym_group,
+            commands::search_related_articles,
             commands::save_article,
             commands::duplicate_article,
             commands::stage_article_image,
@@ -76,6 +107,9 @@ pub fn run() {
             commands::export_faq_csv,
             commands::inspect_faq_csv,
             commands::import_faq_csv,
+            commands::export_json,
+            commands::inspect_json,
+            commands::import_json,
             commands::delete_article,
             commands::restore_article,
             commands::create_full_backup,

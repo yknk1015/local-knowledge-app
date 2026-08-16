@@ -14,6 +14,9 @@ const CodexProposalsPage = lazy(() => import("../pages/CodexProposalsPage").then
 const LoginPage = lazy(() => import("../pages/LoginPage").then((module) => ({ default: module.LoginPage })));
 const UsersPage = lazy(() => import("../pages/UsersPage").then((module) => ({ default: module.UsersPage })));
 const CsvImportPage = lazy(() => import("../pages/CsvImportPage").then((module) => ({ default: module.CsvImportPage })));
+const SynonymsPage = lazy(() => import("../pages/SynonymsPage").then((module) => ({ default: module.SynonymsPage })));
+const HistoryPage = lazy(() => import("../pages/HistoryPage").then((module) => ({ default: module.HistoryPage })));
+const JsonTransferPage = lazy(() => import("../pages/JsonTransferPage").then((module) => ({ default: module.JsonTransferPage })));
 
 function RequireAuth({ admin = false }: { admin?: boolean }) {
   const { user, loading } = useAuth();
@@ -36,8 +39,11 @@ export function App() {
             <Route path="/articles/:articleId" element={<ArticleDetailPage />} />
             <Route path="/articles/:articleId/edit" element={<ArticleEditorPage />} />
             <Route path="/categories" element={<CategoriesPage />} />
+            <Route path="/synonyms" element={<SynonymsPage />} />
+            <Route path="/history" element={<HistoryPage />} />
             <Route path="/manage" element={<ArticleManagementPage />} />
             <Route path="/manage/csv-import" element={<CsvImportPage />} />
+            <Route path="/manage/json-transfer" element={<JsonTransferPage />} />
             <Route path="/codex-proposals" element={<CodexProposalsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route element={<RequireAuth admin />}>

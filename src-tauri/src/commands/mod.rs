@@ -17,14 +17,19 @@ use crate::{
         CodexDelegationKind, CodexDelegationResult, CodexMergePublicationContext,
         CodexProposalInbox, CodexProposalKind, CreateCategoryInput, CreateCodexDelegationInput,
         CreateFullBackupInput, CreateUserInput, CsvExportResult, CsvImportPreview, CsvImportResult,
-        ExportFaqCsvInput, ImportFaqCsvInput, LoginInput, ManagementArticlePage,
-        ManagementArticlesInput, MarkCodexMergeSourcesResult, PasswordPolicySettings,
-        ResetUserPasswordInput, RestoreResult, SaveArticleInput, SearchArticlePage,
-        SearchArticlesInput, SetUserActiveInput, StageArticleImageBytesInput, StagedArticleImage,
-        SystemInfo, UpdateCategoryInput, UserRole, UserSummary,
+        DeleteHistoryInput, ExportFaqCsvInput, ExportJsonInput, ImportFaqCsvInput, ImportJsonInput,
+        JsonExportResult, JsonImportPreview, JsonImportResult, ListSearchLogsInput,
+        ListViewLogsInput, LoginInput, ManagementArticlePage, ManagementArticlesInput,
+        MarkCodexMergeSourcesResult, PasswordPolicySettings, RecordArticleViewInput,
+        RecordSearchLogInput, RelatedArticleCandidate, ReorderCategoryInput,
+        ResetUserPasswordInput, RestoreResult, SaveArticleInput, SaveSynonymGroupInput,
+        SearchArticlePage, SearchArticlesInput, SearchLogPage, SearchRelatedArticlesInput,
+        SetUserActiveInput, StageArticleImageBytesInput, StagedArticleImage, SynonymGroup,
+        SystemInfo, UpdateCategoryInput, UserRole, UserSummary, ViewLogPage,
     },
     repositories::database::{
-        ArticleRecord, CodexProposalArticleRecord, CodexProposalRevisionRecord, NewCategoryRecord,
+        ArticleDetailsRecord, ArticleRecord, CodexProposalArticleRecord,
+        CodexProposalRevisionRecord, NewCategoryRecord, normalize,
     },
     services::{attachments, backup, codex_proposals, rich_content},
 };
@@ -47,18 +52,38 @@ fn lock_session<'state, 'managed>(
         .map_err(|_| AppError::system("ログイン状態を確認できませんでした。"))
 }
 
-fn require_user(state: &State<'_, AppState>) -> AppResult<AuthenticatedUser> {
-    lock_session(state)?
-        .clone()
-        .ok_or_else(crate::services::auth::login_required_error)
+fn require_user_value(user: Option<AuthenticatedUser>) -> AppResult<AuthenticatedUser> {
+    user.ok_or_else(crate::services::auth::login_required_error)
 }
 
-fn require_admin(state: &State<'_, AppState>) -> AppResult<AuthenticatedUser> {
-    let user = require_user(state)?;
+fn require_user(state: &State<'_, AppState>) -> AppResult<AuthenticatedUser> {
+    require_user_value(lock_session(state)?.clone())
+}
+
+fn require_admin_value(user: Option<AuthenticatedUser>) -> AppResult<AuthenticatedUser> {
+    let user = require_user_value(user)?;
     if user.role != UserRole::Admin {
         return Err(crate::services::auth::admin_required_error());
     }
     Ok(user)
+}
+
+fn require_admin(state: &State<'_, AppState>) -> AppResult<AuthenticatedUser> {
+    require_admin_value(lock_session(state)?.clone())
+}
+
+fn validate_user_activation(
+    current: &AuthenticatedUser,
+    input: &SetUserActiveInput,
+) -> AppResult<()> {
+    if current.id == input.id && !input.is_active {
+        return Err(AppError::new(
+            "USR-002",
+            "ログイン中の利用者自身は利用停止にできません。",
+            "別の管理者でログインしてから利用停止にしてください。",
+        ));
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -105,13 +130,7 @@ pub fn set_user_active(
     state: State<'_, AppState>,
 ) -> AppResult<UserSummary> {
     let current = require_admin(&state)?;
-    if current.id == input.id && !input.is_active {
-        return Err(AppError::new(
-            "USR-002",
-            "ログイン中の利用者自身は利用停止にできません。",
-            "別の管理者でログインしてから利用停止にしてください。",
-        ));
-    }
+    validate_user_activation(&current, &input)?;
     lock_database(&state)?.set_user_active(&input.id, input.is_active)
 }
 
@@ -140,6 +159,7 @@ pub fn get_system_info(state: State<'_, AppState>) -> AppResult<SystemInfo> {
 
 #[tauri::command]
 pub fn get_settings(state: State<'_, AppState>) -> AppResult<AppSettings> {
+    require_user(&state)?;
     lock_database(&state)?.get_settings()
 }
 
@@ -201,6 +221,17 @@ pub fn update_category(
     )?;
     refresh_category_catalog_best_effort(&state);
     Ok(category)
+}
+
+#[tauri::command]
+pub fn reorder_category(
+    input: ReorderCategoryInput,
+    state: State<'_, AppState>,
+) -> AppResult<Vec<Category>> {
+    require_user(&state)?;
+    let categories = lock_database(&state)?.reorder_category(&input.id, input.direction)?;
+    refresh_category_catalog_best_effort(&state);
+    Ok(categories)
 }
 
 #[tauri::command]
@@ -431,8 +462,14 @@ fn validate_revision_attachments(
     proposed: &[rich_content::AttachmentReference],
     current: &Article,
 ) -> AppResult<()> {
+    validate_revision_attachment_records(proposed, &current.attachments)
+}
+
+fn validate_revision_attachment_records(
+    proposed: &[rich_content::AttachmentReference],
+    current: &[crate::models::ArticleAttachment],
+) -> AppResult<()> {
     let expected = current
-        .attachments
         .iter()
         .map(|attachment| (attachment.id.as_str(), attachment.alt_text.as_str()))
         .collect::<HashSet<_>>();
@@ -503,9 +540,127 @@ pub fn search_articles(
 }
 
 #[tauri::command]
+pub fn record_search_log(
+    input: RecordSearchLogInput,
+    state: State<'_, AppState>,
+) -> AppResult<String> {
+    require_user(&state)?;
+    if input.query.chars().count() > 500 {
+        return Err(AppError::new(
+            "LOG-001",
+            "検索文は500文字以内で入力してください。",
+            "検索文を短くして、もう一度検索してください。",
+        ));
+    }
+    lock_database(&state)?.record_search_log(
+        &input.query,
+        input.category_id.as_deref(),
+        input.scope,
+        input.result_count,
+    )
+}
+
+#[tauri::command]
+pub fn record_article_view(
+    input: RecordArticleViewInput,
+    state: State<'_, AppState>,
+) -> AppResult<()> {
+    require_user(&state)?;
+    lock_database(&state)?
+        .record_article_view(&input.article_id, input.source_search_log_id.as_deref())
+}
+
+#[tauri::command]
+pub fn list_search_logs(
+    input: ListSearchLogsInput,
+    state: State<'_, AppState>,
+) -> AppResult<SearchLogPage> {
+    require_user(&state)?;
+    if input.query.chars().count() > 500 {
+        return Err(AppError::new(
+            "LOG-001",
+            "絞り込み文字列は500文字以内で入力してください。",
+            "文字列を短くして、もう一度お試しください。",
+        ));
+    }
+    lock_database(&state)?.list_search_logs(&input)
+}
+
+#[tauri::command]
+pub fn list_view_logs(
+    input: ListViewLogsInput,
+    state: State<'_, AppState>,
+) -> AppResult<ViewLogPage> {
+    require_user(&state)?;
+    if input.query.chars().count() > 500 {
+        return Err(AppError::new(
+            "LOG-001",
+            "絞り込み文字列は500文字以内で入力してください。",
+            "文字列を短くして、もう一度お試しください。",
+        ));
+    }
+    lock_database(&state)?.list_view_logs(&input)
+}
+
+#[tauri::command]
+pub fn delete_history(input: DeleteHistoryInput, state: State<'_, AppState>) -> AppResult<i64> {
+    require_user(&state)?;
+    lock_database(&state)?.delete_history(
+        input.target,
+        input.start_date.as_deref(),
+        input.end_date.as_deref(),
+        input.delete_all,
+    )
+}
+
+#[tauri::command]
+pub fn list_synonym_groups(state: State<'_, AppState>) -> AppResult<Vec<SynonymGroup>> {
+    require_user(&state)?;
+    lock_database(&state)?.list_synonym_groups()
+}
+
+#[tauri::command]
+pub fn save_synonym_group(
+    input: SaveSynonymGroupInput,
+    state: State<'_, AppState>,
+) -> AppResult<SynonymGroup> {
+    require_user(&state)?;
+    lock_database(&state)?.save_synonym_group(
+        input.id.as_deref(),
+        &input.display_name,
+        &input.terms,
+        input.allow_conflicts,
+    )
+}
+
+#[tauri::command]
+pub fn delete_synonym_group(id: String, state: State<'_, AppState>) -> AppResult<()> {
+    require_user(&state)?;
+    lock_database(&state)?.delete_synonym_group(&id)
+}
+
+#[tauri::command]
+pub fn search_related_articles(
+    input: SearchRelatedArticlesInput,
+    state: State<'_, AppState>,
+) -> AppResult<Vec<RelatedArticleCandidate>> {
+    require_user(&state)?;
+    if input.query.chars().count() > 200 {
+        return Err(AppError::new(
+            "ART-009",
+            "関連FAQの検索文は200文字以内で入力してください。",
+            "検索文を短くして、もう一度お試しください。",
+        ));
+    }
+    lock_database(&state)?
+        .search_related_article_candidates(input.article_id.as_deref(), &input.query)
+}
+
+#[tauri::command]
 pub fn save_article(input: SaveArticleInput, state: State<'_, AppState>) -> AppResult<Article> {
     let actor = require_user(&state)?;
     validate_article_fields(&input)?;
+    validate_article_details(&input)?;
     let rich_content = rich_content::validate_and_extract_with_attachments(&input.body_doc)?;
     if input.status == "published"
         && rich_content.plain_text.trim().is_empty()
@@ -552,7 +707,18 @@ pub fn save_article(input: SaveArticleInput, state: State<'_, AppState>) -> AppR
         &rich_content.attachments,
         &existing,
     )?;
-    let saved = database.save_article_as(
+    let details = ArticleDetailsRecord {
+        symptoms: &input.symptoms,
+        causes: &input.causes,
+        targets: &input.targets,
+        error_codes: &input.error_codes,
+        procedures: &input.procedures,
+        cautions: &input.cautions,
+        tags: &input.tags,
+        search_terms: &input.search_terms,
+        related_article_ids: &input.related_article_ids,
+    };
+    let saved = database.save_article_with_details_as(
         ArticleRecord {
             id: &article_id,
             is_new,
@@ -568,6 +734,7 @@ pub fn save_article(input: SaveArticleInput, state: State<'_, AppState>) -> AppR
             is_hidden: input.is_hidden,
             attachments: &prepared.records,
         },
+        &details,
         &actor.id,
     );
     let mut article = match saved {
@@ -652,7 +819,23 @@ pub fn duplicate_article(id: String, state: State<'_, AppState>) -> AppResult<Ar
         }
     };
     let title = duplicate_title(&source.title);
-    let saved = database.save_article_as(
+    let related_article_ids = source
+        .related_articles
+        .iter()
+        .map(|related| related.id.clone())
+        .collect::<Vec<_>>();
+    let details = ArticleDetailsRecord {
+        symptoms: &source.symptoms,
+        causes: &source.causes,
+        targets: &source.targets,
+        error_codes: &source.error_codes,
+        procedures: &source.procedures,
+        cautions: &source.cautions,
+        tags: &source.tags,
+        search_terms: &source.search_terms,
+        related_article_ids: &related_article_ids,
+    };
+    let saved = database.save_article_with_details_as(
         ArticleRecord {
             id: &article_id,
             is_new: true,
@@ -668,6 +851,7 @@ pub fn duplicate_article(id: String, state: State<'_, AppState>) -> AppResult<Ar
             is_hidden: source.is_hidden,
             attachments: &prepared.records,
         },
+        &details,
         &actor.id,
     );
     let mut article = match saved {
@@ -842,6 +1026,62 @@ pub fn import_faq_csv(
 }
 
 #[tauri::command]
+pub fn export_json(
+    input: ExportJsonInput,
+    state: State<'_, AppState>,
+) -> AppResult<JsonExportResult> {
+    require_user(&state)?;
+    let path = PathBuf::from(input.destination_path);
+    validate_json_path(&path, false)?;
+    lock_database(&state)?.export_json(&path)
+}
+
+#[tauri::command]
+pub fn inspect_json(path: String, state: State<'_, AppState>) -> AppResult<JsonImportPreview> {
+    require_user(&state)?;
+    let path = PathBuf::from(path);
+    validate_json_path(&path, true)?;
+    lock_database(&state)?.inspect_json(&path)
+}
+
+#[tauri::command]
+pub fn import_json(
+    input: ImportJsonInput,
+    state: State<'_, AppState>,
+) -> AppResult<JsonImportResult> {
+    let actor = require_user(&state)?;
+    let path = PathBuf::from(input.source_path);
+    validate_json_path(&path, true)?;
+    let mut database = lock_database(&state)?;
+    let preview = database.inspect_json(&path)?;
+    if preview.file_sha256 != input.expected_file_sha256 {
+        return Err(AppError::new(
+            "JSON-007",
+            "確認後にJSONファイルが変更されています。",
+            "JSONをもう一度プレビューしてから取り込んでください。",
+        ));
+    }
+    if preview.error_count > 0 {
+        return Err(AppError::new(
+            "JSON-004",
+            "エラーがあるためJSONを取り込めません。",
+            "プレビューに表示された内容を修正し、もう一度選択してください。",
+        ));
+    }
+    let safety_path = backup::create_json_import_safety_backup(&state.data_root, &database)?;
+    let result = database.import_json(
+        &path,
+        &input.expected_file_sha256,
+        &actor.id,
+        safety_path.display().to_string(),
+    )?;
+    let categories = database.list_categories()?;
+    drop(database);
+    codex_proposals::write_category_catalog(&state.data_root, &categories)?;
+    Ok(result)
+}
+
+#[tauri::command]
 pub fn delete_article(id: String, state: State<'_, AppState>) -> AppResult<Article> {
     let actor = require_user(&state)?;
     let mut article = lock_database(&state)?.delete_article_as(&id, &actor.id)?;
@@ -946,6 +1186,70 @@ fn validate_article_fields(input: &SaveArticleInput) -> AppResult<()> {
     Ok(())
 }
 
+fn validate_article_details(input: &SaveArticleInput) -> AppResult<()> {
+    for (label, values, maximum_length) in [
+        ("症状", input.symptoms.as_slice(), 200),
+        ("想定原因", input.causes.as_slice(), 200),
+        ("対象", input.targets.as_slice(), 200),
+        ("エラーコード", input.error_codes.as_slice(), 100),
+        ("対応手順", input.procedures.as_slice(), 500),
+        ("注意事項", input.cautions.as_slice(), 500),
+        ("タグ", input.tags.as_slice(), 100),
+        ("検索用語", input.search_terms.as_slice(), 200),
+    ] {
+        if values.len() > 50 {
+            return Err(AppError::new(
+                "ART-009",
+                format!("{label}は50件以内で登録してください。"),
+                "不要な項目を削除して、もう一度保存してください。",
+            ));
+        }
+        let mut normalized_values = HashSet::new();
+        for value in values {
+            let value = value.trim();
+            if value.is_empty()
+                || value.chars().count() > maximum_length
+                || value.contains('\r')
+                || value.contains('\n')
+            {
+                return Err(AppError::new(
+                    "ART-009",
+                    format!("{label}は1～{maximum_length}文字の1行テキストで入力してください。"),
+                    "入力内容を短くし、空の項目や改行を削除してください。",
+                ));
+            }
+            if !normalized_values.insert(normalize(value)) {
+                return Err(AppError::new(
+                    "ART-009",
+                    format!("{label}に同じ内容が重複しています。"),
+                    "重複している項目を1件にまとめてください。",
+                ));
+            }
+        }
+    }
+    if input.related_article_ids.len() > 50 {
+        return Err(AppError::new(
+            "ART-009",
+            "関連FAQは50件以内で選択してください。",
+            "不要な関連FAQを外して、もう一度保存してください。",
+        ));
+    }
+    let mut related_ids = HashSet::new();
+    for related_id in &input.related_article_ids {
+        if related_id.trim().is_empty()
+            || input.id.as_deref() == Some(related_id.as_str())
+            || !related_ids.insert(related_id)
+        {
+            return Err(AppError::new(
+                "ART-009",
+                "関連FAQに自己参照または重複があります。",
+                "同じFAQを1回だけ選択し、編集中のFAQ自身は選択しないでください。",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_csv_path(path: &std::path::Path, must_exist: bool) -> AppResult<()> {
     if !path.is_absolute()
         || !path
@@ -984,6 +1288,44 @@ fn validate_csv_path(path: &std::path::Path, must_exist: bool) -> AppResult<()> 
     Ok(())
 }
 
+fn validate_json_path(path: &std::path::Path, must_exist: bool) -> AppResult<()> {
+    if !path.is_absolute()
+        || !path
+            .to_string_lossy()
+            .to_ascii_lowercase()
+            .ends_with(".knowledge-export.json")
+        || (must_exist && !path.is_file())
+    {
+        return Err(AppError::new(
+            "JSON-001",
+            "JSONファイルの場所またはファイル名が正しくありません。",
+            "絶対パスにある「.knowledge-export.json」で終わるファイルを指定してください。",
+        ));
+    }
+    let parent = path.parent().ok_or_else(|| {
+        AppError::new(
+            "JSON-001",
+            "JSONファイルの保存先を確認できません。",
+            "別のフォルダを選択してください。",
+        )
+    })?;
+    if !must_exist && !parent.is_dir() {
+        return Err(AppError::new(
+            "JSON-001",
+            "JSONの保存先フォルダが見つかりません。",
+            "既存のフォルダを選択してください。",
+        ));
+    }
+    if crate::services::data_root::find_git_root(parent).is_some() {
+        return Err(AppError::new(
+            "JSON-006",
+            "Git管理フォルダ内のJSONは使用できません。",
+            "FAQデータの誤登録を防ぐため、デスクトップやドキュメントなどGit管理外を選択してください。",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_badge_date(value: Option<&str>, label: &str) -> AppResult<()> {
     let Some(value) = value else {
         return Ok(());
@@ -1003,6 +1345,94 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn authenticated_user(id: &str, role: UserRole) -> AuthenticatedUser {
+        AuthenticatedUser {
+            id: id.into(),
+            login_id: format!("login-{id}"),
+            display_name: format!("利用者{id}"),
+            role,
+        }
+    }
+
+    #[test]
+    fn protected_command_guards_require_login_and_admin_role() {
+        assert_eq!(require_user_value(None).unwrap_err().code, "AUTH-002");
+        assert_eq!(require_admin_value(None).unwrap_err().code, "AUTH-002");
+        assert_eq!(
+            require_admin_value(Some(authenticated_user("general", UserRole::User)))
+                .unwrap_err()
+                .code,
+            "AUTH-003"
+        );
+        assert!(require_admin_value(Some(authenticated_user("admin", UserRole::Admin))).is_ok());
+    }
+
+    #[test]
+    fn current_user_cannot_disable_their_own_account() {
+        let current = authenticated_user("admin", UserRole::Admin);
+        let input = SetUserActiveInput {
+            id: current.id.clone(),
+            is_active: false,
+        };
+        assert_eq!(
+            validate_user_activation(&current, &input).unwrap_err().code,
+            "USR-002"
+        );
+        assert!(
+            validate_user_activation(
+                &current,
+                &SetUserActiveInput {
+                    id: "another-admin".into(),
+                    is_active: false,
+                },
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn codex_revision_must_preserve_every_image_id_and_alt_text() {
+        let id = Uuid::now_v7().to_string();
+        let current = vec![crate::models::ArticleAttachment {
+            id: id.clone(),
+            original_name: "screen.png".into(),
+            media_type: "image/png".into(),
+            byte_size: 123,
+            sha256: "hash".into(),
+            alt_text: "設定画面".into(),
+            asset_path: "managed/screen.png".into(),
+            created_at: "2026-08-16T00:00:00Z".into(),
+        }];
+        assert!(
+            validate_revision_attachment_records(
+                &[rich_content::AttachmentReference {
+                    id: id.clone(),
+                    alt_text: "設定画面".into(),
+                }],
+                &current,
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            validate_revision_attachment_records(
+                &[rich_content::AttachmentReference {
+                    id,
+                    alt_text: "変更された説明".into(),
+                }],
+                &current,
+            )
+            .unwrap_err()
+            .code,
+            "CDX-021"
+        );
+        assert_eq!(
+            validate_revision_attachment_records(&[], &current)
+                .unwrap_err()
+                .code,
+            "CDX-021"
+        );
+    }
+
     #[test]
     fn published_article_requires_summary() {
         let input = SaveArticleInput {
@@ -1016,6 +1446,15 @@ mod tests {
             new_badge_until: None,
             updated_badge_until: None,
             is_hidden: false,
+            symptoms: Vec::new(),
+            causes: Vec::new(),
+            targets: Vec::new(),
+            error_codes: Vec::new(),
+            procedures: Vec::new(),
+            cautions: Vec::new(),
+            tags: Vec::new(),
+            search_terms: Vec::new(),
+            related_article_ids: Vec::new(),
         };
         assert_eq!(validate_article_fields(&input).unwrap_err().code, "ART-001");
     }
@@ -1051,5 +1490,24 @@ mod tests {
         let title = duplicate_title(&"あ".repeat(200));
         assert_eq!(title.chars().count(), 200);
         assert!(title.ends_with("（コピー）"));
+    }
+
+    #[test]
+    fn json_transfer_rejects_git_managed_and_wrong_extension_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let repository = directory.path().join("repository");
+        std::fs::create_dir_all(repository.join(".git")).unwrap();
+        let unsafe_path = repository.join("data.knowledge-export.json");
+        assert_eq!(
+            validate_json_path(&unsafe_path, false).unwrap_err().code,
+            "JSON-006"
+        );
+        let wrong_extension = directory.path().join("data.json");
+        assert_eq!(
+            validate_json_path(&wrong_extension, false)
+                .unwrap_err()
+                .code,
+            "JSON-001"
+        );
     }
 }

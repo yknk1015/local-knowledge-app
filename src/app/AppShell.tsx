@@ -4,7 +4,7 @@ import { FaqMascot } from "../components/FaqMascot";
 import { useDisplaySettings } from "./ColorTheme";
 import { useAuth } from "./AuthContext";
 
-type IconName = "search" | "plus" | "sparkles" | "list" | "folder" | "settings" | "check" | "users";
+type IconName = "search" | "plus" | "sparkles" | "list" | "folder" | "settings" | "check" | "users" | "history";
 
 const navItems: Array<{ to: string; label: string; icon: IconName }> = [
   { to: "/search", label: "FAQを探す", icon: "search" },
@@ -12,6 +12,8 @@ const navItems: Array<{ to: string; label: string; icon: IconName }> = [
   { to: "/codex-proposals", label: "Codexからの提案", icon: "sparkles" },
   { to: "/manage", label: "FAQの管理", icon: "list" },
   { to: "/categories", label: "分類の管理", icon: "folder" },
+  { to: "/synonyms", label: "同義語の管理", icon: "sparkles" },
+  { to: "/history", label: "検索・閲覧履歴", icon: "history" },
   { to: "/settings", label: "設定・情報", icon: "settings" },
 ];
 
@@ -25,6 +27,7 @@ function AppIcon({ name }: { name: IconName }) {
     settings: <><circle cx="12" cy="12" r="3" /><path d="M19 12a7.6 7.6 0 0 0-.1-1l2-1.6-2-3.4-2.5 1a8 8 0 0 0-1.7-1L14.3 3h-4.1L9.8 6a8 8 0 0 0-1.7 1L5.6 6 3.5 9.4l2 1.6a7.6 7.6 0 0 0 0 2l-2 1.6L5.6 18l2.5-1a8 8 0 0 0 1.7 1l.4 3h4.1l.4-3a8 8 0 0 0 1.7-1l2.5 1 2-3.4-2-1.6a7.6 7.6 0 0 0 .1-1z" /></>,
     check: <><circle cx="12" cy="12" r="8.5" /><path d="m8.5 12.2 2.2 2.2 4.8-5" /></>,
     users: <><circle cx="9" cy="8" r="3" /><path d="M3.5 19c.4-4 2.2-6 5.5-6s5.1 2 5.5 6M15 6.5a2.5 2.5 0 0 1 0 5M16 13c2.7.3 4.1 2.2 4.5 5" /></>,
+    history: <><circle cx="12" cy="12" r="8.5" /><path d="M12 7v5l3.5 2M5.5 5.5 3 8V4h4" /></>,
   };
 
   return <svg viewBox="0 0 24 24" aria-hidden="true">{paths[name]}</svg>;

@@ -5,7 +5,7 @@ import { useDisplaySettings } from "../app/ColorTheme";
 import { EmptyState, ErrorState, LoadingState } from "../components/Feedback";
 import { StatusBadge } from "../components/StatusBadge";
 import { ArticleDisplayBadges } from "../components/ArticleDisplayBadges";
-import type { AppError, ArticleListItem, Category, SearchArticlePage, SearchSort } from "../types/domain";
+import type { AppError, ArticleListItem, Category, SearchArticlePage, SearchScope, SearchSort } from "../types/domain";
 
 function SearchIcon() {
   return (
@@ -62,6 +62,7 @@ const SEARCH_RETURN_POSITION_KEY = "knowledgeapp.searchReturnPosition";
 const COLLAPSED_CATEGORIES_KEY = "knowledgeapp.collapsedSearchCategories";
 const EMPTY_SEARCH_PAGE: SearchArticlePage = { items: [], total: 0, page: 1, pageSize: 50 };
 const DEFAULT_SEARCH_SORT: SearchSort = "updatedDesc";
+const DEFAULT_SEARCH_SCOPE: SearchScope = "descendants";
 
 interface SearchReturnPosition {
   returnTo: string;
@@ -110,6 +111,10 @@ function parseSort(value: string | null): SearchSort {
   }
 }
 
+function parseScope(value: string | null): SearchScope {
+  return value === "current" || value === "all" ? value : DEFAULT_SEARCH_SCOPE;
+}
+
 function paginationItems(currentPage: number, totalPages: number): Array<number | string> {
   const candidates = new Set([1, totalPages, currentPage - 1, currentPage, currentPage + 1]);
   const pages = [...candidates]
@@ -130,17 +135,20 @@ export function SearchPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const submittedQuery = searchParams.get("q")?.trim() ?? "";
   const selectedCategory = searchParams.get("category") ?? "";
+  const selectedScope = parseScope(searchParams.get("scope"));
   const includeDrafts = searchParams.get("drafts") === "1";
   const requestedPage = parsePage(searchParams.get("page"));
   const selectedSort = parseSort(searchParams.get("sort"));
   const returnTo = `${location.pathname}${location.search}`;
   const restoreScrollY = useRef(readSearchReturnPosition(returnTo));
   const pageNavigationTarget = useRef<number | null>(null);
+  const recordNextSearch = useRef(false);
   const resultsHeadingRef = useRef<HTMLHeadingElement>(null);
   const [categories, setCategories] = useState<Category[]>([]);
   const [result, setResult] = useState<SearchArticlePage>(EMPTY_SEARCH_PAGE);
   const [collapsedCategories, setCollapsedCategories] = useState(readCollapsedCategories);
   const [query, setQuery] = useState(submittedQuery);
+  const [currentSearchLogId, setCurrentSearchLogId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<AppError | null>(null);
   const categoryById = useMemo(
@@ -165,6 +173,8 @@ export function SearchPage() {
   const totalPages = Math.max(1, Math.ceil(result.total / result.pageSize));
 
   const load = useCallback(async () => {
+    const shouldRecord = recordNextSearch.current;
+    recordNextSearch.current = false;
     setLoading(true);
     setError(null);
     try {
@@ -173,6 +183,7 @@ export function SearchPage() {
         knowledgeApi.searchArticles({
           query: submittedQuery,
           categoryId: selectedCategory || undefined,
+          scope: selectedScope,
           includeDrafts,
           page: requestedPage,
           sort: selectedSort,
@@ -180,10 +191,19 @@ export function SearchPage() {
       ]);
       setCategories(categoryItems);
       setResult(articleItems);
+      if (shouldRecord) {
+        setCurrentSearchLogId(await knowledgeApi.recordSearchLog(
+          submittedQuery,
+          selectedCategory || undefined,
+          selectedScope,
+          articleItems.total,
+        ));
+      }
       if (articleItems.page !== requestedPage) {
         const nextParams = new URLSearchParams();
         if (submittedQuery) nextParams.set("q", submittedQuery);
         if (selectedCategory) nextParams.set("category", selectedCategory);
+        if (selectedScope !== DEFAULT_SEARCH_SCOPE) nextParams.set("scope", selectedScope);
         if (includeDrafts) nextParams.set("drafts", "1");
         if (selectedSort !== DEFAULT_SEARCH_SORT) nextParams.set("sort", selectedSort);
         if (articleItems.page > 1) nextParams.set("page", String(articleItems.page));
@@ -194,7 +214,7 @@ export function SearchPage() {
     } finally {
       setLoading(false);
     }
-  }, [includeDrafts, requestedPage, selectedCategory, selectedSort, setSearchParams, submittedQuery]);
+  }, [includeDrafts, requestedPage, selectedCategory, selectedScope, selectedSort, setSearchParams, submittedQuery]);
 
   useEffect(() => {
     void load();
@@ -255,13 +275,16 @@ export function SearchPage() {
   }, [loading, requestedPage, result.page]);
 
   const selectedCategoryItem = categories.find((category) => category.id === selectedCategory);
-  const categoryScopeLabel = selectedCategoryItem
-    ? `「${selectedCategoryItem.name}」以下`
-    : "すべての分類";
+  const categoryScopeLabel = selectedScope === "all"
+    ? "すべての分類"
+    : selectedScope === "current"
+      ? selectedCategoryItem ? `「${selectedCategoryItem.name}」のみ` : "仮想ルートのみ"
+      : selectedCategoryItem ? `「${selectedCategoryItem.name}」以下` : "すべての分類";
   const hasActiveFilters = Boolean(
     query
     || submittedQuery
     || selectedCategory
+    || selectedScope !== DEFAULT_SEARCH_SCOPE
     || includeDrafts
     || requestedPage > 1
     || selectedSort !== DEFAULT_SEARCH_SORT,
@@ -269,6 +292,7 @@ export function SearchPage() {
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
+    recordNextSearch.current = true;
     const nextQuery = query.trim();
     if (nextQuery === submittedQuery && requestedPage === 1) {
       void load();
@@ -283,10 +307,12 @@ export function SearchPage() {
 
   const clearFilters = () => {
     setQuery("");
+    setCurrentSearchLogId(null);
     setSearchParams(new URLSearchParams(), { replace: true });
   };
 
   const selectCategory = (categoryId: string) => {
+    setCurrentSearchLogId(null);
     const nextParams = new URLSearchParams(searchParams);
     if (categoryId) nextParams.set("category", categoryId);
     else nextParams.delete("category");
@@ -295,9 +321,19 @@ export function SearchPage() {
   };
 
   const setDraftVisibility = (checked: boolean) => {
+    setCurrentSearchLogId(null);
     const nextParams = new URLSearchParams(searchParams);
     if (checked) nextParams.set("drafts", "1");
     else nextParams.delete("drafts");
+    nextParams.delete("page");
+    setSearchParams(nextParams, { replace: true });
+  };
+
+  const setScope = (scope: SearchScope) => {
+    setCurrentSearchLogId(null);
+    const nextParams = new URLSearchParams(searchParams);
+    if (scope === DEFAULT_SEARCH_SCOPE) nextParams.delete("scope");
+    else nextParams.set("scope", scope);
     nextParams.delete("page");
     setSearchParams(nextParams, { replace: true });
   };
@@ -369,10 +405,20 @@ export function SearchPage() {
           </button>
         </div>
         <div className="search-options">
-          <span className="search-scope">
+          <label className="search-scope">
             <FolderIcon />
-            検索範囲：<strong>{categoryScopeLabel}</strong>
-          </span>
+            <span>検索範囲</span>
+            <select
+              aria-label="検索範囲"
+              value={selectedScope}
+              onChange={(event) => setScope(event.target.value as SearchScope)}
+            >
+              <option value="descendants">現在地以下</option>
+              <option value="current">現在地のみ</option>
+              <option value="all">すべて</option>
+            </select>
+            <strong>{categoryScopeLabel}</strong>
+          </label>
           <label className="toggle-label">
             <input
               type="checkbox"
@@ -471,7 +517,13 @@ export function SearchPage() {
           </nav>
 
           {categories.length > 0 && (
-            <p className="category-sidebar-help">選んだ分類と、その配下にあるFAQを表示します。</p>
+            <p className="category-sidebar-help">
+              {selectedScope === "current"
+                ? "選んだ分類に直接所属するFAQだけを表示します。"
+                : selectedScope === "all"
+                  ? "分類の選択にかかわらず、すべてのFAQを表示します。"
+                  : "選んだ分類と、その配下にあるFAQを表示します。"}
+            </p>
           )}
         </aside>
 
@@ -527,7 +579,7 @@ export function SearchPage() {
                   <article key={article.id} className="article-card" role="listitem">
                     <Link
                       to={`/articles/${article.id}`}
-                      state={{ returnTo }}
+                      state={{ returnTo, sourceSearchLogId: currentSearchLogId }}
                       className="article-card-link"
                       onClick={rememberSearchPosition}
                     >
@@ -542,6 +594,16 @@ export function SearchPage() {
                         </div>
                         <h3>{displayArticleTitle(article, categoryById, showTopCategoryInTitle)}</h3>
                         <p className="article-card-summary">{article.summary || "概要はまだ入力されていません。"}</p>
+                        {article.tags && article.tags.length > 0 && (
+                          <ul className="article-card-tags" aria-label="主要タグ">
+                            {article.tags.slice(0, 3).map((tag) => <li key={tag}>{tag}</li>)}
+                          </ul>
+                        )}
+                        {article.matchReasons && article.matchReasons.length > 0 && (
+                          <p className="article-match-reasons">
+                            <strong>一致：</strong>{article.matchReasons.join(" ／ ")}
+                          </p>
+                        )}
                       </div>
                       <div className="article-card-facts">
                         <div className="article-updated-at">

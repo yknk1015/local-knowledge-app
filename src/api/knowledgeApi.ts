@@ -19,6 +19,8 @@ import type {
   SearchArticlePage,
   RestoreResult,
   StagedArticleImage,
+  RelatedArticleCandidate,
+  SynonymGroup,
   SystemInfo,
   AuthenticatedUser,
   UserRole,
@@ -27,6 +29,11 @@ import type {
   CsvImportPreview,
   CsvImportResult,
   PasswordPolicySettings,
+  SearchLogPage,
+  ViewLogPage,
+  JsonExportResult,
+  JsonImportPreview,
+  JsonImportResult,
 } from "../types/domain";
 
 function isAppError(value: unknown): value is AppError {
@@ -96,6 +103,8 @@ export const knowledgeApi = {
     call<Category>("create_category", { input: { name, description, parentId: parentId || null } }),
   updateCategory: (id: string, name: string, description: string, parentId?: string) =>
     call<Category>("update_category", { input: { id, name, description, parentId: parentId || null } }),
+  reorderCategory: (id: string, direction: "up" | "down") =>
+    call<Category[]>("reorder_category", { input: { id, direction } }),
   deleteCategory: (id: string) => call<void>("delete_category", { id }),
   listCodexProposals: () => call<CodexProposalInbox>("list_codex_proposals"),
   acceptCodexProposal: (
@@ -115,6 +124,57 @@ export const knowledgeApi = {
     }),
   searchArticles: (input: SearchArticlesInput) =>
     call<SearchArticlePage>("search_articles", { input }),
+  recordSearchLog: (
+    query: string,
+    categoryId: string | undefined,
+    scope: "descendants" | "current" | "all",
+    resultCount: number,
+  ) => call<string>("record_search_log", {
+    input: { query, categoryId, scope, resultCount },
+  }),
+  recordArticleView: (articleId: string, sourceSearchLogId?: string) =>
+    call<void>("record_article_view", {
+      input: { articleId, sourceSearchLogId },
+    }),
+  listSearchLogs: (
+    query: string,
+    startDate: string | undefined,
+    endDate: string | undefined,
+    zeroResultsOnly: boolean,
+    page: number,
+  ) => call<SearchLogPage>("list_search_logs", {
+    input: { query, startDate, endDate, zeroResultsOnly, page },
+  }),
+  listViewLogs: (
+    query: string,
+    startDate: string | undefined,
+    endDate: string | undefined,
+    page: number,
+  ) => call<ViewLogPage>("list_view_logs", {
+    input: { query, startDate, endDate, page },
+  }),
+  deleteHistory: (
+    target: "search" | "view",
+    startDate: string | undefined,
+    endDate: string | undefined,
+    deleteAll: boolean,
+  ) => call<number>("delete_history", {
+    input: { target, startDate, endDate, deleteAll },
+  }),
+  listSynonymGroups: () => call<SynonymGroup[]>("list_synonym_groups"),
+  saveSynonymGroup: (
+    id: string | undefined,
+    displayName: string,
+    terms: string[],
+    allowConflicts = false,
+  ) => call<SynonymGroup>("save_synonym_group", {
+    input: { id, displayName, terms, allowConflicts },
+  }),
+  deleteSynonymGroup: (id: string) => call<void>("delete_synonym_group", { id }),
+  searchRelatedArticles: (articleId: string | undefined, query: string) =>
+    call<RelatedArticleCandidate[]>("search_related_articles", {
+      input: { articleId, query },
+    }),
   getArticle: (id: string) => call<Article>("get_article", { id }),
   getCodexMergePublicationContext: (articleId: string) =>
     call<CodexMergePublicationContext | null>("get_codex_merge_publication_context", {
@@ -142,6 +202,11 @@ export const knowledgeApi = {
   inspectFaqCsv: (path: string) => call<CsvImportPreview>("inspect_faq_csv", { path }),
   importFaqCsv: (sourcePath: string, expectedFileSha256: string) =>
     call<CsvImportResult>("import_faq_csv", { input: { sourcePath, expectedFileSha256 } }),
+  exportJson: (destinationPath: string) =>
+    call<JsonExportResult>("export_json", { input: { destinationPath } }),
+  inspectJson: (path: string) => call<JsonImportPreview>("inspect_json", { path }),
+  importJson: (sourcePath: string, expectedFileSha256: string) =>
+    call<JsonImportResult>("import_json", { input: { sourcePath, expectedFileSha256 } }),
   deleteArticle: (id: string) => call<Article>("delete_article", { id }),
   restoreArticle: (id: string) => call<Article>("restore_article", { id }),
   getBackupOverview: () => call<BackupOverview>("get_backup_overview"),
