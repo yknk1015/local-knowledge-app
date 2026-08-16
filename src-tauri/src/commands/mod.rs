@@ -3,7 +3,7 @@ use std::{
     path::PathBuf,
 };
 
-use chrono::NaiveDate;
+use chrono::{Local, NaiveDate};
 use tauri::State;
 use tauri_plugin_opener::OpenerExt;
 use url::Url;
@@ -12,12 +12,16 @@ use crate::{
     AppState,
     errors::{AppError, AppResult},
     models::{
-        AcceptCodexProposalInput, AcceptCodexProposalResult, AppSettings, Article, ArticleListItem,
-        BackupOverview, BackupPreview, BackupResult, Category, CodexDelegationKind,
-        CodexDelegationResult, CodexProposalInbox, CodexProposalKind, CreateCategoryInput,
-        CreateCodexDelegationInput, CreateFullBackupInput, ManagementArticlePage,
-        ManagementArticlesInput, RestoreResult, SaveArticleInput, SearchArticlesInput,
-        StageArticleImageBytesInput, StagedArticleImage, SystemInfo, UpdateCategoryInput,
+        AcceptCodexProposalInput, AcceptCodexProposalResult, AppSettings, Article,
+        AuthenticatedUser, BackupOverview, BackupPreview, BackupResult, Category,
+        CodexDelegationKind, CodexDelegationResult, CodexMergePublicationContext,
+        CodexProposalInbox, CodexProposalKind, CreateCategoryInput, CreateCodexDelegationInput,
+        CreateFullBackupInput, CreateUserInput, CsvExportResult, CsvImportPreview, CsvImportResult,
+        ExportFaqCsvInput, ImportFaqCsvInput, LoginInput, ManagementArticlePage,
+        ManagementArticlesInput, MarkCodexMergeSourcesResult, PasswordPolicySettings,
+        ResetUserPasswordInput, RestoreResult, SaveArticleInput, SearchArticlePage,
+        SearchArticlesInput, SetUserActiveInput, StageArticleImageBytesInput, StagedArticleImage,
+        SystemInfo, UpdateCategoryInput, UserRole, UserSummary,
     },
     repositories::database::{
         ArticleRecord, CodexProposalArticleRecord, CodexProposalRevisionRecord, NewCategoryRecord,
@@ -34,13 +38,104 @@ fn lock_database<'state, 'managed>(
     })
 }
 
+fn lock_session<'state, 'managed>(
+    state: &'state State<'managed, AppState>,
+) -> AppResult<std::sync::MutexGuard<'state, Option<AuthenticatedUser>>> {
+    state
+        .session
+        .lock()
+        .map_err(|_| AppError::system("ログイン状態を確認できませんでした。"))
+}
+
+fn require_user(state: &State<'_, AppState>) -> AppResult<AuthenticatedUser> {
+    lock_session(state)?
+        .clone()
+        .ok_or_else(crate::services::auth::login_required_error)
+}
+
+fn require_admin(state: &State<'_, AppState>) -> AppResult<AuthenticatedUser> {
+    let user = require_user(state)?;
+    if user.role != UserRole::Admin {
+        return Err(crate::services::auth::admin_required_error());
+    }
+    Ok(user)
+}
+
 #[tauri::command]
-pub fn get_system_info(state: State<'_, AppState>) -> SystemInfo {
-    SystemInfo {
+pub fn login(input: LoginInput, state: State<'_, AppState>) -> AppResult<AuthenticatedUser> {
+    if input.login_id.trim().is_empty() {
+        return Err(crate::services::auth::authentication_error());
+    }
+    let user = lock_database(&state)?.authenticate_user(&input.login_id, &input.password)?;
+    *lock_session(&state)? = Some(user.clone());
+    Ok(user)
+}
+
+#[tauri::command]
+pub fn logout(state: State<'_, AppState>) -> AppResult<()> {
+    *lock_session(&state)? = None;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_current_user(state: State<'_, AppState>) -> AppResult<Option<AuthenticatedUser>> {
+    Ok(lock_session(&state)?.clone())
+}
+
+#[tauri::command]
+pub fn list_users(state: State<'_, AppState>) -> AppResult<Vec<UserSummary>> {
+    require_admin(&state)?;
+    lock_database(&state)?.list_users()
+}
+
+#[tauri::command]
+pub fn create_user(input: CreateUserInput, state: State<'_, AppState>) -> AppResult<UserSummary> {
+    require_admin(&state)?;
+    lock_database(&state)?.create_user(
+        &input.login_id,
+        &input.display_name,
+        &input.password,
+        input.role,
+    )
+}
+
+#[tauri::command]
+pub fn set_user_active(
+    input: SetUserActiveInput,
+    state: State<'_, AppState>,
+) -> AppResult<UserSummary> {
+    let current = require_admin(&state)?;
+    if current.id == input.id && !input.is_active {
+        return Err(AppError::new(
+            "USR-002",
+            "ログイン中の利用者自身は利用停止にできません。",
+            "別の管理者でログインしてから利用停止にしてください。",
+        ));
+    }
+    lock_database(&state)?.set_user_active(&input.id, input.is_active)
+}
+
+#[tauri::command]
+pub fn reset_user_password(
+    input: ResetUserPasswordInput,
+    state: State<'_, AppState>,
+) -> AppResult<UserSummary> {
+    require_admin(&state)?;
+    lock_database(&state)?.reset_user_password(&input.id, &input.password)
+}
+
+#[tauri::command]
+pub fn get_system_info(state: State<'_, AppState>) -> AppResult<SystemInfo> {
+    require_user(&state)?;
+    Ok(SystemInfo {
         app_version: env!("CARGO_PKG_VERSION").to_owned(),
         data_root: state.data_root.root().display().to_string(),
         database_path: state.data_root.database_path().display().to_string(),
-    }
+        codex_category_catalog_path: codex_proposals::category_catalog_path(&state.data_root)
+            .display()
+            .to_string(),
+        codex_inbox_path: state.data_root.codex_inbox_path().display().to_string(),
+    })
 }
 
 #[tauri::command]
@@ -50,12 +145,30 @@ pub fn get_settings(state: State<'_, AppState>) -> AppResult<AppSettings> {
 
 #[tauri::command]
 pub fn save_settings(input: AppSettings, state: State<'_, AppState>) -> AppResult<AppSettings> {
+    require_user(&state)?;
     lock_database(&state)?.save_settings(&input)?;
     Ok(input)
 }
 
 #[tauri::command]
+pub fn get_password_policy(state: State<'_, AppState>) -> AppResult<PasswordPolicySettings> {
+    require_admin(&state)?;
+    lock_database(&state)?.get_password_policy()
+}
+
+#[tauri::command]
+pub fn save_password_policy(
+    input: PasswordPolicySettings,
+    state: State<'_, AppState>,
+) -> AppResult<PasswordPolicySettings> {
+    require_admin(&state)?;
+    lock_database(&state)?.save_password_policy(&input)?;
+    Ok(input)
+}
+
+#[tauri::command]
 pub fn list_categories(state: State<'_, AppState>) -> AppResult<Vec<Category>> {
+    require_user(&state)?;
     lock_database(&state)?.list_categories()
 }
 
@@ -64,6 +177,7 @@ pub fn create_category(
     input: CreateCategoryInput,
     state: State<'_, AppState>,
 ) -> AppResult<Category> {
+    require_user(&state)?;
     let category = lock_database(&state)?.create_category_with_description(
         &input.name,
         &input.description,
@@ -78,6 +192,7 @@ pub fn update_category(
     input: UpdateCategoryInput,
     state: State<'_, AppState>,
 ) -> AppResult<Category> {
+    require_user(&state)?;
     let category = lock_database(&state)?.update_category_with_description(
         &input.id,
         &input.name,
@@ -90,6 +205,7 @@ pub fn update_category(
 
 #[tauri::command]
 pub fn delete_category(id: String, state: State<'_, AppState>) -> AppResult<()> {
+    require_user(&state)?;
     lock_database(&state)?.delete_category(&id)?;
     refresh_category_catalog_best_effort(&state);
     Ok(())
@@ -97,6 +213,7 @@ pub fn delete_category(id: String, state: State<'_, AppState>) -> AppResult<()> 
 
 #[tauri::command]
 pub fn list_codex_proposals(state: State<'_, AppState>) -> AppResult<CodexProposalInbox> {
+    require_user(&state)?;
     let categories = lock_database(&state)?.list_categories()?;
     codex_proposals::write_category_catalog(&state.data_root, &categories)?;
     let (proposals, rejected) = codex_proposals::list_proposals(&state.data_root)?;
@@ -125,6 +242,7 @@ pub fn accept_codex_proposal(
     input: AcceptCodexProposalInput,
     state: State<'_, AppState>,
 ) -> AppResult<AcceptCodexProposalResult> {
+    let actor = require_user(&state)?;
     let proposal = {
         let database = lock_database(&state)?;
         match database.get_pending_codex_proposal(&input.request_id) {
@@ -159,15 +277,18 @@ pub fn accept_codex_proposal(
         let mut database = lock_database(&state)?;
         let current = database.get_article(&source.article_id)?;
         validate_revision_attachments(&content.attachments, &current)?;
-        let mut article = database.accept_codex_revision(CodexProposalRevisionRecord {
-            request_id: &proposal.request_id,
-            source_article: source,
-            title: proposal.faq.title.trim(),
-            summary: proposal.faq.summary.trim(),
-            body_doc: &proposal.faq.body_doc,
-            body_plain_text: &content.plain_text,
-            importance: proposal.faq.importance,
-        })?;
+        let mut article = database.accept_codex_revision_as(
+            CodexProposalRevisionRecord {
+                request_id: &proposal.request_id,
+                source_article: source,
+                title: proposal.faq.title.trim(),
+                summary: proposal.faq.summary.trim(),
+                body_doc: &proposal.faq.body_doc,
+                body_plain_text: &content.plain_text,
+                importance: proposal.faq.importance,
+            },
+            &actor.id,
+        )?;
         drop(database);
         attachments::hydrate_article_paths(&state.data_root, &mut article)?;
         let _ = codex_proposals::discard_proposal(&state.data_root, &proposal.request_id);
@@ -207,8 +328,8 @@ pub fn accept_codex_proposal(
         (category_id, None)
     };
 
-    let (mut article, created_category) =
-        lock_database(&state)?.accept_codex_proposal(CodexProposalArticleRecord {
+    let (mut article, created_category) = lock_database(&state)?.accept_codex_proposal_as(
+        CodexProposalArticleRecord {
             request_id: &proposal.request_id,
             proposal_kind: proposal.proposal_kind,
             source_articles: &proposal.source_articles,
@@ -220,7 +341,9 @@ pub fn accept_codex_proposal(
             body_doc: &proposal.faq.body_doc,
             body_plain_text: &content.plain_text,
             importance: proposal.faq.importance,
-        })?;
+        },
+        &actor.id,
+    )?;
     attachments::hydrate_article_paths(&state.data_root, &mut article)?;
     let _ = codex_proposals::discard_proposal(&state.data_root, &proposal.request_id);
     refresh_category_catalog_best_effort(&state);
@@ -232,6 +355,7 @@ pub fn accept_codex_proposal(
 
 #[tauri::command]
 pub fn reject_codex_proposal(request_id: String, state: State<'_, AppState>) -> AppResult<()> {
+    require_user(&state)?;
     lock_database(&state)?.reject_codex_proposal(&request_id)?;
     let _ = codex_proposals::discard_proposal(&state.data_root, &request_id);
     Ok(())
@@ -242,6 +366,7 @@ pub fn reopen_rejected_codex_proposal(
     request_id: String,
     state: State<'_, AppState>,
 ) -> AppResult<()> {
+    require_user(&state)?;
     lock_database(&state)?.reopen_rejected_codex_proposal(&request_id)
 }
 
@@ -250,6 +375,7 @@ pub fn create_codex_delegation(
     input: CreateCodexDelegationInput,
     state: State<'_, AppState>,
 ) -> AppResult<CodexDelegationResult> {
+    require_user(&state)?;
     let expected = match input.kind {
         CodexDelegationKind::Revise => 1..=1,
         CodexDelegationKind::Merge => 2..=10,
@@ -285,6 +411,13 @@ pub fn create_codex_delegation(
                 "CDX-020",
                 "削除済みFAQはCodexへ委譲できません。",
                 "FAQを復元するか、登録中のFAQを選び直してください。",
+            ));
+        }
+        if article.merge_info.is_some() {
+            return Err(AppError::new(
+                "CDX-020",
+                "統合済みFAQはCodexへ委譲できません。",
+                "統合先のFAQを利用するか、FAQ管理画面で統合を解除してから選び直してください。",
             ));
         }
         articles.push(article);
@@ -328,7 +461,34 @@ fn refresh_category_catalog_best_effort(state: &State<'_, AppState>) {
 
 #[tauri::command]
 pub fn get_article(id: String, state: State<'_, AppState>) -> AppResult<Article> {
+    require_user(&state)?;
     let mut article = lock_database(&state)?.get_article(&id)?;
+    attachments::hydrate_article_paths(&state.data_root, &mut article)?;
+    Ok(article)
+}
+
+#[tauri::command]
+pub fn get_codex_merge_publication_context(
+    article_id: String,
+    state: State<'_, AppState>,
+) -> AppResult<Option<CodexMergePublicationContext>> {
+    require_user(&state)?;
+    lock_database(&state)?.get_codex_merge_publication_context(&article_id)
+}
+
+#[tauri::command]
+pub fn mark_codex_merge_sources(
+    article_id: String,
+    state: State<'_, AppState>,
+) -> AppResult<MarkCodexMergeSourcesResult> {
+    require_user(&state)?;
+    lock_database(&state)?.mark_codex_merge_sources(&article_id)
+}
+
+#[tauri::command]
+pub fn clear_article_merge(article_id: String, state: State<'_, AppState>) -> AppResult<Article> {
+    require_user(&state)?;
+    let mut article = lock_database(&state)?.clear_article_merge(&article_id)?;
     attachments::hydrate_article_paths(&state.data_root, &mut article)?;
     Ok(article)
 }
@@ -337,12 +497,14 @@ pub fn get_article(id: String, state: State<'_, AppState>) -> AppResult<Article>
 pub fn search_articles(
     input: SearchArticlesInput,
     state: State<'_, AppState>,
-) -> AppResult<Vec<ArticleListItem>> {
+) -> AppResult<SearchArticlePage> {
+    require_user(&state)?;
     lock_database(&state)?.search_articles(&input)
 }
 
 #[tauri::command]
 pub fn save_article(input: SaveArticleInput, state: State<'_, AppState>) -> AppResult<Article> {
+    let actor = require_user(&state)?;
     validate_article_fields(&input)?;
     let rich_content = rich_content::validate_and_extract_with_attachments(&input.body_doc)?;
     if input.status == "published"
@@ -362,6 +524,23 @@ pub fn save_article(input: SaveArticleInput, state: State<'_, AppState>) -> AppR
         .clone()
         .unwrap_or_else(|| Uuid::now_v7().to_string());
     let mut database = lock_database(&state)?;
+    if !is_new
+        && input.status == "published"
+        && database.requires_new_badge_for_merge_publication(&article_id)?
+    {
+        let valid_new_badge = input
+            .new_badge_until
+            .as_deref()
+            .and_then(|date| NaiveDate::parse_from_str(date, "%Y-%m-%d").ok())
+            .is_some_and(|date| date >= Local::now().date_naive());
+        if !valid_new_badge || input.is_hidden {
+            return Err(AppError::new(
+                "ART-008",
+                "統合FAQを公開する場合は、本日以降の新着表示終了日と表示設定が必要です。",
+                "「新着」を表示する設定をオンにして本日以降の日付を選び、非表示をオフにしてください。",
+            ));
+        }
+    }
     let existing = if is_new {
         Vec::new()
     } else {
@@ -373,21 +552,24 @@ pub fn save_article(input: SaveArticleInput, state: State<'_, AppState>) -> AppR
         &rich_content.attachments,
         &existing,
     )?;
-    let saved = database.save_article(ArticleRecord {
-        id: &article_id,
-        is_new,
-        category_id: &input.category_id,
-        title: input.title.trim(),
-        summary: input.summary.trim(),
-        body_doc: &input.body_doc,
-        body_plain_text: &rich_content.plain_text,
-        status: &input.status,
-        importance: input.importance,
-        new_badge_until: input.new_badge_until.as_deref(),
-        updated_badge_until: input.updated_badge_until.as_deref(),
-        is_hidden: input.is_hidden,
-        attachments: &prepared.records,
-    });
+    let saved = database.save_article_as(
+        ArticleRecord {
+            id: &article_id,
+            is_new,
+            category_id: &input.category_id,
+            title: input.title.trim(),
+            summary: input.summary.trim(),
+            body_doc: &input.body_doc,
+            body_plain_text: &rich_content.plain_text,
+            status: &input.status,
+            importance: input.importance,
+            new_badge_until: input.new_badge_until.as_deref(),
+            updated_badge_until: input.updated_badge_until.as_deref(),
+            is_hidden: input.is_hidden,
+            attachments: &prepared.records,
+        },
+        &actor.id,
+    );
     let mut article = match saved {
         Ok(article) => article,
         Err(error) => {
@@ -402,6 +584,7 @@ pub fn save_article(input: SaveArticleInput, state: State<'_, AppState>) -> AppR
 
 #[tauri::command]
 pub fn duplicate_article(id: String, state: State<'_, AppState>) -> AppResult<Article> {
+    let actor = require_user(&state)?;
     let mut database = lock_database(&state)?;
     let source = database.get_article(&id)?;
     if source.deleted_at.is_some() {
@@ -469,21 +652,24 @@ pub fn duplicate_article(id: String, state: State<'_, AppState>) -> AppResult<Ar
         }
     };
     let title = duplicate_title(&source.title);
-    let saved = database.save_article(ArticleRecord {
-        id: &article_id,
-        is_new: true,
-        category_id: &source.category_id,
-        title: &title,
-        summary: &source.summary,
-        body_doc: &body_doc,
-        body_plain_text: &copied_content.plain_text,
-        status: "draft",
-        importance: source.importance,
-        new_badge_until: None,
-        updated_badge_until: None,
-        is_hidden: source.is_hidden,
-        attachments: &prepared.records,
-    });
+    let saved = database.save_article_as(
+        ArticleRecord {
+            id: &article_id,
+            is_new: true,
+            category_id: &source.category_id,
+            title: &title,
+            summary: &source.summary,
+            body_doc: &body_doc,
+            body_plain_text: &copied_content.plain_text,
+            status: "draft",
+            importance: source.importance,
+            new_badge_until: None,
+            updated_badge_until: None,
+            is_hidden: source.is_hidden,
+            attachments: &prepared.records,
+        },
+        &actor.id,
+    );
     let mut article = match saved {
         Ok(article) => article,
         Err(error) => {
@@ -518,6 +704,7 @@ pub fn stage_article_image(
     path: String,
     state: State<'_, AppState>,
 ) -> AppResult<StagedArticleImage> {
+    require_user(&state)?;
     attachments::stage_from_path(&state.data_root, &PathBuf::from(path))
 }
 
@@ -526,16 +713,24 @@ pub fn stage_article_image_bytes(
     input: StageArticleImageBytesInput,
     state: State<'_, AppState>,
 ) -> AppResult<StagedArticleImage> {
+    require_user(&state)?;
     attachments::stage_bytes(&state.data_root, &input.original_name, &input.bytes)
 }
 
 #[tauri::command]
-pub fn discard_staged_article_image(id: String, state: State<'_, AppState>) {
+pub fn discard_staged_article_image(id: String, state: State<'_, AppState>) -> AppResult<()> {
+    require_user(&state)?;
     attachments::discard_stage(&state.data_root, &id);
+    Ok(())
 }
 
 #[tauri::command]
-pub fn open_external_url(url: String, app: tauri::AppHandle) -> AppResult<()> {
+pub fn open_external_url(
+    url: String,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> AppResult<()> {
+    require_user(&state)?;
     validate_external_url(&url)?;
     app.opener().open_url(url, None::<&str>).map_err(|_| {
         AppError::new(
@@ -574,6 +769,7 @@ pub fn list_articles_for_management(
     input: ManagementArticlesInput,
     state: State<'_, AppState>,
 ) -> AppResult<ManagementArticlePage> {
+    require_user(&state)?;
     if input.page < 1 {
         return Err(AppError::new(
             "ART-001",
@@ -594,15 +790,69 @@ pub fn list_articles_for_management(
 }
 
 #[tauri::command]
+pub fn export_faq_csv(
+    input: ExportFaqCsvInput,
+    state: State<'_, AppState>,
+) -> AppResult<CsvExportResult> {
+    require_user(&state)?;
+    let path = PathBuf::from(input.destination_path);
+    validate_csv_path(&path, false)?;
+    lock_database(&state)?.export_faq_csv(&path)
+}
+
+#[tauri::command]
+pub fn inspect_faq_csv(path: String, state: State<'_, AppState>) -> AppResult<CsvImportPreview> {
+    require_user(&state)?;
+    let path = PathBuf::from(path);
+    validate_csv_path(&path, true)?;
+    lock_database(&state)?.inspect_faq_csv(&path)
+}
+
+#[tauri::command]
+pub fn import_faq_csv(
+    input: ImportFaqCsvInput,
+    state: State<'_, AppState>,
+) -> AppResult<CsvImportResult> {
+    let actor = require_user(&state)?;
+    let path = PathBuf::from(input.source_path);
+    validate_csv_path(&path, true)?;
+    let mut database = lock_database(&state)?;
+    let preview = database.inspect_faq_csv(&path)?;
+    if preview.file_sha256 != input.expected_file_sha256 {
+        return Err(AppError::new(
+            "CSV-007",
+            "確認後にCSVファイルが変更されています。",
+            "CSVをもう一度プレビューしてから取り込んでください。",
+        ));
+    }
+    if preview.error_count > 0 {
+        return Err(AppError::new(
+            "CSV-004",
+            "エラーがあるためCSVを取り込めません。",
+            "プレビューに表示された行を修正し、もう一度選択してください。",
+        ));
+    }
+    let safety_path = backup::create_csv_import_safety_backup(&state.data_root, &database)?;
+    database.import_faq_csv(
+        &path,
+        &input.expected_file_sha256,
+        &actor.id,
+        safety_path.display().to_string(),
+    )
+}
+
+#[tauri::command]
 pub fn delete_article(id: String, state: State<'_, AppState>) -> AppResult<Article> {
-    let mut article = lock_database(&state)?.delete_article(&id)?;
+    let actor = require_user(&state)?;
+    let mut article = lock_database(&state)?.delete_article_as(&id, &actor.id)?;
     attachments::hydrate_article_paths(&state.data_root, &mut article)?;
     Ok(article)
 }
 
 #[tauri::command]
 pub fn restore_article(id: String, state: State<'_, AppState>) -> AppResult<Article> {
-    let mut article = lock_database(&state)?.restore_article(&id)?;
+    let actor = require_user(&state)?;
+    let mut article = lock_database(&state)?.restore_article_as(&id, &actor.id)?;
     attachments::hydrate_article_paths(&state.data_root, &mut article)?;
     Ok(article)
 }
@@ -612,6 +862,7 @@ pub fn create_full_backup(
     input: CreateFullBackupInput,
     state: State<'_, AppState>,
 ) -> AppResult<BackupResult> {
+    require_admin(&state)?;
     let database = lock_database(&state)?;
     backup::create_full_backup(
         &state.data_root,
@@ -624,19 +875,23 @@ pub fn create_full_backup(
 
 #[tauri::command]
 pub fn get_backup_overview(state: State<'_, AppState>) -> AppResult<BackupOverview> {
+    require_admin(&state)?;
     let database = lock_database(&state)?;
     backup::backup_overview(&state.data_root, &database)
 }
 
 #[tauri::command]
 pub fn inspect_backup(path: String, state: State<'_, AppState>) -> AppResult<BackupPreview> {
+    require_admin(&state)?;
     backup::inspect_backup(&state.data_root, &PathBuf::from(path))
 }
 
 #[tauri::command]
 pub fn restore_backup(path: String, state: State<'_, AppState>) -> AppResult<RestoreResult> {
+    require_admin(&state)?;
     let mut database = lock_database(&state)?;
     let result = backup::restore_backup(&state.data_root, &mut database, &PathBuf::from(path))?;
+    *lock_session(&state)? = None;
     let categories = database.list_categories()?;
     drop(database);
     codex_proposals::write_category_catalog(&state.data_root, &categories)?;
@@ -688,6 +943,44 @@ fn validate_article_fields(input: &SaveArticleInput) -> AppResult<()> {
     }
     validate_badge_date(input.new_badge_until.as_deref(), "新着")?;
     validate_badge_date(input.updated_badge_until.as_deref(), "更新")?;
+    Ok(())
+}
+
+fn validate_csv_path(path: &std::path::Path, must_exist: bool) -> AppResult<()> {
+    if !path.is_absolute()
+        || !path
+            .to_string_lossy()
+            .to_ascii_lowercase()
+            .ends_with(".knowledge-faq.csv")
+        || (must_exist && !path.is_file())
+    {
+        return Err(AppError::new(
+            "CSV-001",
+            "CSVファイルの場所またはファイル名が正しくありません。",
+            "絶対パスにある「.knowledge-faq.csv」で終わるファイルを指定してください。",
+        ));
+    }
+    let parent = path.parent().ok_or_else(|| {
+        AppError::new(
+            "CSV-001",
+            "CSVファイルの保存先を確認できません。",
+            "別のフォルダを選択してください。",
+        )
+    })?;
+    if !must_exist && !parent.is_dir() {
+        return Err(AppError::new(
+            "CSV-001",
+            "CSVの保存先フォルダが見つかりません。",
+            "既存のフォルダを選択してください。",
+        ));
+    }
+    if crate::services::data_root::find_git_root(parent).is_some() {
+        return Err(AppError::new(
+            "CSV-006",
+            "Git管理フォルダ内のCSVは使用できません。",
+            "FAQデータの誤登録を防ぐため、デスクトップやドキュメントなどGit管理外を選択してください。",
+        ));
+    }
     Ok(())
 }
 

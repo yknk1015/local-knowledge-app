@@ -4,7 +4,12 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { knowledgeApi, toAppError } from "../api/knowledgeApi";
 import { ErrorState, LoadingState } from "../components/Feedback";
 import { RichTextEditor, type ManagedImageSource } from "../components/RichTextEditor";
-import type { AppError, ArticleStatus, Category } from "../types/domain";
+import type {
+  AppError,
+  ArticleStatus,
+  Category,
+  CodexMergePublicationContext,
+} from "../types/domain";
 import "./ArticleEditorPage.css";
 
 const EMPTY_DOCUMENT: Record<string, unknown> = {
@@ -18,8 +23,21 @@ const VALIDATION_MESSAGES = {
   summary: "公開する場合は概要を入力してください。",
   body: "公開する場合は回答を入力してください。",
   newBadge: "新着フラグの表示終了日を選択してください。",
+  mergeNewBadge: "統合FAQを公開する場合は、新着フラグと本日以降の表示終了日を設定してください。",
   updatedBadge: "更新フラグの表示終了日を選択してください。",
 } as const;
+
+export function getDefaultBadgeUntil(today: Date = new Date()): string {
+  const endDate = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 7);
+  return formatLocalDate(endDate);
+}
+
+function formatLocalDate(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
 
 function documentHasContent(value: unknown): boolean {
   if (Array.isArray(value)) return value.some(documentHasContent);
@@ -47,6 +65,8 @@ export function ArticleEditorPage() {
   const [bodyDoc, setBodyDoc] = useState<Record<string, unknown>>(EMPTY_DOCUMENT);
   const [imageSources, setImageSources] = useState<ManagedImageSource[]>([]);
   const [status, setStatus] = useState<ArticleStatus>("draft");
+  const [initialStatus, setInitialStatus] = useState<ArticleStatus>("draft");
+  const [mergeContext, setMergeContext] = useState<CodexMergePublicationContext | null>(null);
   const [importance, setImportance] = useState(1);
   const [newBadgeEnabled, setNewBadgeEnabled] = useState(false);
   const [newBadgeUntil, setNewBadgeUntil] = useState("");
@@ -76,10 +96,13 @@ export function ArticleEditorPage() {
         if (!active) return;
         setCategories(categoryItems);
         if (!articleId) {
-          setCategoryId(categoryItems[0]?.id ?? "");
+          setCategoryId("");
           return;
         }
-        const article = await knowledgeApi.getArticle(articleId);
+        const [article, publicationContext] = await Promise.all([
+          knowledgeApi.getArticle(articleId),
+          knowledgeApi.getCodexMergePublicationContext(articleId),
+        ]);
         if (!active) return;
         if (article.deletedAt) {
           setError({
@@ -101,6 +124,8 @@ export function ArticleEditorPage() {
           })),
         );
         setStatus(article.status);
+        setInitialStatus(article.status);
+        setMergeContext(publicationContext);
         setImportance(article.importance);
         setNewBadgeEnabled(Boolean(article.newBadgeUntil));
         setNewBadgeUntil(article.newBadgeUntil ?? "");
@@ -138,10 +163,15 @@ export function ArticleEditorPage() {
 
   const canSave = useMemo(() => title.trim() !== "" && categoryId !== "", [categoryId, title]);
   const hasAnswer = useMemo(() => documentHasContent(bodyDoc), [bodyDoc]);
+  const isInitialMergePublication = Boolean(
+    mergeContext && initialStatus !== "published" && status === "published",
+  );
   const selectedStatus = statusCopy(status);
   const missingBasicFields = [!title.trim() ? "タイトル" : "", !categoryId ? "所属分類" : ""].filter(Boolean);
   const basicSectionComplete = canSave && (status !== "published" || summary.trim() !== "");
-  const displaySectionComplete = (!newBadgeEnabled || Boolean(newBadgeUntil)) && (!updatedBadgeEnabled || Boolean(updatedBadgeUntil));
+  const displaySectionComplete = (!newBadgeEnabled || Boolean(newBadgeUntil))
+    && (!updatedBadgeEnabled || Boolean(updatedBadgeUntil))
+    && (!isInitialMergePublication || (newBadgeEnabled && Boolean(newBadgeUntil)));
   const currentStateReady = basicSectionComplete && (status !== "published" || hasAnswer) && displaySectionComplete;
   const clearValidation = (...messages: string[]) => {
     setValidation((current) => current.filter((message) => !messages.includes(message)));
@@ -198,7 +228,11 @@ export function ArticleEditorPage() {
     if (!categoryId) problems.push(VALIDATION_MESSAGES.category);
     if (status === "published" && !summary.trim()) problems.push(VALIDATION_MESSAGES.summary);
     if (status === "published" && !hasAnswer) problems.push(VALIDATION_MESSAGES.body);
-    if (newBadgeEnabled && !newBadgeUntil) problems.push(VALIDATION_MESSAGES.newBadge);
+    if (isInitialMergePublication && (!newBadgeEnabled || !newBadgeUntil || newBadgeUntil < formatLocalDate(new Date()))) {
+      problems.push(VALIDATION_MESSAGES.mergeNewBadge);
+    } else if (newBadgeEnabled && !newBadgeUntil) {
+      problems.push(VALIDATION_MESSAGES.newBadge);
+    }
     if (updatedBadgeEnabled && !updatedBadgeUntil) problems.push(VALIDATION_MESSAGES.updatedBadge);
     setValidation(problems);
     if (problems.length > 0) return;
@@ -218,6 +252,45 @@ export function ArticleEditorPage() {
         updatedBadgeUntil: updatedBadgeEnabled ? updatedBadgeUntil : null,
         isHidden,
       });
+      setInitialStatus(saved.status);
+      if (mergeContext && saved.status === "published" && !mergeContext.allSourcesMerged) {
+        if (!mergeContext.canMarkMerged) {
+          setError({
+            code: "CDX-012",
+            message: "統合FAQは公開しましたが、元FAQに変更または削除があるため統合済みにはしていません。",
+            action: "FAQ管理画面で元FAQを確認し、必要であれば現在のFAQから統合をやり直してください。",
+          });
+          return;
+        }
+        const sourceTitles = mergeContext.sourceArticles
+          .map((source) => `・${source.title}`)
+          .join("\n");
+        const savedMessage = isInitialMergePublication
+          ? "統合FAQを新着として公開しました。"
+          : "統合FAQを公開状態で保存しました。";
+        if (window.confirm(
+          `${savedMessage}\n\n次の元FAQを「統合済み」にしますか？\n${sourceTitles}\n\n元FAQの内容や公開状態は変えず、通常の検索結果から除外します。`,
+        )) {
+          try {
+            const result = await knowledgeApi.markCodexMergeSources(saved.id);
+            navigate(`/articles/${saved.id}`, {
+              state: { notice: `${result.markedCount}件の元FAQを「統合済み」にしました。` },
+            });
+            return;
+          } catch (caught) {
+            const mergeError = toAppError(caught);
+            setError({
+              ...mergeError,
+              message: `統合FAQは公開しましたが、${mergeError.message}`,
+            });
+            return;
+          }
+        }
+        navigate(`/articles/${saved.id}`, {
+          state: { notice: `${savedMessage} 元FAQは統合済みにしていません。` },
+        });
+        return;
+      }
       navigate(`/articles/${saved.id}`);
     } catch (caught) {
       setError(toAppError(caught));
@@ -256,6 +329,7 @@ export function ArticleEditorPage() {
             <h1>{isEditing ? "FAQを編集" : "新しいFAQを作成"}</h1>
           </div>
           <p>質問と回答を入力し、公開方法を選んで保存します。下書きなら途中の状態でも保存できます。</p>
+          <small className="editor-security-note">安全のために、パスワードや秘密鍵、個人情報はFAQへ登録しないでください。</small>
         </div>
         <div className="editor-shortcut" aria-label="キーボードショートカット">
           <kbd>Ctrl</kbd><span>＋</span><kbd>S</kbd><small>で保存</small>
@@ -269,7 +343,7 @@ export function ArticleEditorPage() {
         </button>
         <button type="button" className={hasAnswer ? "complete" : ""} onClick={() => document.getElementById("editor-answer")?.scrollIntoView({ behavior: "smooth", block: "start" })}>
           <span className="step-mark">{hasAnswer ? "✓" : "2"}</span>
-          <span><strong>回答</strong><small>手順・画像・参考URL</small></span>
+          <span><strong>回答</strong><small>手順・画像・外部資料</small></span>
         </button>
         <button type="button" className={displaySectionComplete ? "complete" : ""} onClick={() => document.getElementById("editor-display")?.scrollIntoView({ behavior: "smooth", block: "start" })}>
           <span className="step-mark">{displaySectionComplete ? "✓" : "3"}</span>
@@ -289,6 +363,25 @@ export function ArticleEditorPage() {
         </div>
       )}
 
+      {mergeContext && (
+        <section className="panel merge-publication-guide" aria-label="統合FAQの公開案内">
+          <strong>この下書きはCodexで統合したFAQです</strong>
+          <p>
+            {mergeContext.allSourcesMerged
+              ? "元FAQは統合済みです。"
+              : "初めて公開する際は新着の表示終了日が必要です。公開後に、元FAQを「統合済み」にするか確認します。"}
+          </p>
+          <ul>
+            {mergeContext.sourceArticles.map((source) => (
+              <li key={source.articleId}>
+                {source.title}
+                {!source.isCurrent && !source.isMerged && <span>（承認後に変更または削除されています）</span>}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <form ref={formRef} onSubmit={submit} className="editor-form" noValidate>
         <section id="editor-basic" className="editor-section-card" aria-labelledby="editor-basic-title">
           <div className="editor-section-heading">
@@ -299,7 +392,7 @@ export function ArticleEditorPage() {
             </div>
           </div>
           <div className="editor-section-body basic-information-grid">
-            <div className="editor-field full-width">
+            <div className={`editor-field basic-info-card required-basic-field full-width ${!title.trim() ? "unfilled" : ""} ${validation.includes(VALIDATION_MESSAGES.title) ? "invalid" : ""}`}>
               <div className="field-label-row">
                 <label htmlFor="faq-title">タイトル（質問文） <b className="required">必須</b></label>
                 <span className="character-count">{title.length} / 200</span>
@@ -321,7 +414,7 @@ export function ArticleEditorPage() {
                 : <small id="faq-title-help" className="field-help">利用者が実際に検索しそうな質問文を入力します。</small>}
             </div>
 
-            <div className="editor-field">
+            <div className={`editor-field basic-info-card required-basic-field ${!categoryId ? "unfilled" : ""} ${validation.includes(VALIDATION_MESSAGES.category) ? "invalid" : ""}`}>
               <label htmlFor="faq-category">所属分類 <b className="required">必須</b></label>
               <select
                 id="faq-category"
@@ -345,8 +438,8 @@ export function ArticleEditorPage() {
               </small>
             </div>
 
-            <div className="editor-field">
-              <label htmlFor="faq-importance">重要度</label>
+            <div className="editor-field basic-info-card optional-basic-field">
+              <label htmlFor="faq-importance">重要度 <span className="optional-field-badge">任意</span></label>
               <select id="faq-importance" value={importance} onChange={(event) => setImportance(Number(event.target.value))}>
                 <option value={1}>1 — 通常</option>
                 <option value={2}>2 — 重要</option>
@@ -355,9 +448,12 @@ export function ArticleEditorPage() {
               <small className="field-help">検索結果の並び順が同点のときに使用します。</small>
             </div>
 
-            <div className="editor-field full-width">
+            <div className={`editor-field basic-info-card conditional-basic-field full-width ${status === "published" ? "required-basic-field" : ""} ${status === "published" && !summary.trim() ? "unfilled" : ""} ${validation.includes(VALIDATION_MESSAGES.summary) ? "invalid" : ""}`}>
               <div className="field-label-row">
-                <label htmlFor="faq-summary">概要（検索結果に表示する短い答え） {status === "published" && <b className="required">公開時必須</b>}</label>
+                <label htmlFor="faq-summary">
+                  概要（検索結果に表示する短い答え）
+                  <b className={status === "published" ? "required" : "required conditional-required"}>公開時必須</b>
+                </label>
                 <span className="character-count">{summary.length} / 500</span>
               </div>
               <textarea
@@ -385,7 +481,7 @@ export function ArticleEditorPage() {
             <span className="section-number">2</span>
             <div>
               <h2 id="editor-answer-title">回答</h2>
-              <p>見出しや番号付きリストを使い、利用者が上から順番に実行できるように整理します。</p>
+              <p>最初に結論を簡潔に示し、その後に手順や詳細を記載すると、読み手に伝わりやすくなります。</p>
             </div>
           </div>
           <div className="editor-section-body">
@@ -407,11 +503,6 @@ export function ArticleEditorPage() {
               />
             </div>
             {validation.includes(VALIDATION_MESSAGES.body) && <small className="field-error-message answer-error">{VALIDATION_MESSAGES.body}</small>}
-            <div className="editor-safety-notes">
-              <p><strong>画像</strong> ファイル選択または貼り付けで追加できます。画像はこのPCのアプリ管理フォルダに保存されます。</p>
-              <p><strong>参考URL</strong> 貼り付けただけではクリックされません。文字を選択し「参考URL」を設定した箇所だけがリンクになります。</p>
-              <p><strong>コピー用</strong> ネットワークパスなどを選択して「コピー用」を押すと、詳細画面で正確にコピーできる枠になります。</p>
-            </div>
           </div>
         </section>
 
@@ -433,7 +524,20 @@ export function ArticleEditorPage() {
                   <span><strong>下書き</strong><small>内容を整えてから公開する</small></span>
                 </label>
                 <label className={status === "published" ? "status-option selected" : "status-option"}>
-                  <input type="radio" name="article-status" value="published" checked={status === "published"} onChange={() => setStatus("published")} />
+                  <input
+                    type="radio"
+                    name="article-status"
+                    value="published"
+                    checked={status === "published"}
+                    onChange={() => {
+                      setStatus("published");
+                      if (mergeContext && initialStatus !== "published") {
+                        setNewBadgeEnabled(true);
+                        setNewBadgeUntil((current) => current || getDefaultBadgeUntil());
+                        clearValidation(VALIDATION_MESSAGES.mergeNewBadge, VALIDATION_MESSAGES.newBadge);
+                      }
+                    }}
+                  />
                   <span className="status-option-mark published" aria-hidden="true">●</span>
                   <span><strong>公開</strong><small>通常の検索結果に表示する</small></span>
                 </label>
@@ -460,8 +564,10 @@ export function ArticleEditorPage() {
                     aria-label="「新着」を表示する"
                     checked={newBadgeEnabled}
                     onChange={(event) => {
-                      setNewBadgeEnabled(event.target.checked);
-                      if (!event.target.checked) clearValidation(VALIDATION_MESSAGES.newBadge);
+                      const enabled = event.target.checked;
+                      setNewBadgeEnabled(enabled);
+                      if (enabled) setNewBadgeUntil((current) => current || getDefaultBadgeUntil());
+                      else clearValidation(VALIDATION_MESSAGES.newBadge, VALIDATION_MESSAGES.mergeNewBadge);
                     }}
                   />
                   <span><strong>「新着」を表示</strong><small>新しく追加したFAQであることを伝えます。</small></span>
@@ -472,16 +578,18 @@ export function ArticleEditorPage() {
                     id="new-badge-until"
                     type="date"
                     value={newBadgeUntil}
+                    min={isInitialMergePublication ? formatLocalDate(new Date()) : undefined}
                     disabled={!newBadgeEnabled}
                     aria-required={newBadgeEnabled}
-                    aria-invalid={validation.includes(VALIDATION_MESSAGES.newBadge)}
+                    aria-invalid={validation.includes(VALIDATION_MESSAGES.newBadge) || validation.includes(VALIDATION_MESSAGES.mergeNewBadge)}
                     onChange={(event) => {
                       setNewBadgeUntil(event.target.value);
-                      clearValidation(VALIDATION_MESSAGES.newBadge);
+                      clearValidation(VALIDATION_MESSAGES.newBadge, VALIDATION_MESSAGES.mergeNewBadge);
                     }}
                   />
                 </label>
                 {validation.includes(VALIDATION_MESSAGES.newBadge) && <small className="field-error-message">{VALIDATION_MESSAGES.newBadge}</small>}
+                {validation.includes(VALIDATION_MESSAGES.mergeNewBadge) && <small className="field-error-message">{VALIDATION_MESSAGES.mergeNewBadge}</small>}
               </div>
               <div className={updatedBadgeEnabled ? "display-setting-card enabled" : "display-setting-card"}>
                 <label className="check-option">
@@ -490,8 +598,10 @@ export function ArticleEditorPage() {
                     aria-label="「更新」を表示する"
                     checked={updatedBadgeEnabled}
                     onChange={(event) => {
-                      setUpdatedBadgeEnabled(event.target.checked);
-                      if (!event.target.checked) clearValidation(VALIDATION_MESSAGES.updatedBadge);
+                      const enabled = event.target.checked;
+                      setUpdatedBadgeEnabled(enabled);
+                      if (enabled) setUpdatedBadgeUntil((current) => current || getDefaultBadgeUntil());
+                      else clearValidation(VALIDATION_MESSAGES.updatedBadge);
                     }}
                   />
                   <span><strong>「更新」を表示</strong><small>内容を見直したFAQであることを伝えます。</small></span>

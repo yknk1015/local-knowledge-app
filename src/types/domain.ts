@@ -1,4 +1,19 @@
 export type ArticleStatus = "draft" | "published" | "archived";
+export type UserRole = "admin" | "user";
+
+export interface AuthenticatedUser {
+  id: string;
+  loginId: string;
+  displayName: string;
+  role: UserRole;
+}
+
+export interface UserSummary extends AuthenticatedUser {
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+  lastLoginAt: string | null;
+}
 
 export interface Category {
   id: string;
@@ -64,6 +79,29 @@ export interface AcceptCodexProposalResult {
   createdCategory: Category | null;
 }
 
+export interface CodexMergeSourcePreview {
+  articleId: string;
+  title: string;
+  status: ArticleStatus | null;
+  sourceUpdatedAt: string;
+  currentUpdatedAt: string | null;
+  deletedAt: string | null;
+  isCurrent: boolean;
+  isMerged: boolean;
+}
+
+export interface CodexMergePublicationContext {
+  targetArticleId: string;
+  sourceArticles: CodexMergeSourcePreview[];
+  canMarkMerged: boolean;
+  allSourcesMerged: boolean;
+}
+
+export interface MarkCodexMergeSourcesResult {
+  targetArticleId: string;
+  markedCount: number;
+}
+
 export interface CodexDelegationResult {
   delegationId: string;
   prompt: string;
@@ -88,8 +126,19 @@ export interface Article extends ArticleListItem {
   bodyDoc: Record<string, unknown>;
   bodyPlainText: string;
   createdAt: string;
+  createdByUserId?: string;
+  createdByDisplayName?: string;
+  updatedByUserId?: string;
+  updatedByDisplayName?: string;
   deletedAt: string | null;
+  mergeInfo: ArticleMergeInfo | null;
   attachments: ArticleAttachment[];
+}
+
+export interface ArticleMergeInfo {
+  targetArticleId: string;
+  targetArticleTitle: string;
+  mergedAt: string;
 }
 
 export interface ArticleAttachment {
@@ -126,10 +175,21 @@ export interface SaveArticleInput {
   isHidden: boolean;
 }
 
+export type SearchSort = "updatedDesc" | "updatedAsc" | "importanceDesc" | "importanceAsc";
+
 export interface SearchArticlesInput {
   query: string;
   categoryId?: string;
   includeDrafts: boolean;
+  page: number;
+  sort: SearchSort;
+}
+
+export interface SearchArticlePage {
+  items: ArticleListItem[];
+  total: number;
+  page: number;
+  pageSize: number;
 }
 
 export interface ManagementArticlesInput {
@@ -141,7 +201,10 @@ export interface ManagementArticlesInput {
 }
 
 export interface ManagementArticleListItem extends ArticleListItem {
+  createdByDisplayName?: string;
+  updatedByDisplayName?: string;
   deletedAt: string | null;
+  mergeInfo: ArticleMergeInfo | null;
 }
 
 export interface ManagementArticlePage {
@@ -151,10 +214,48 @@ export interface ManagementArticlePage {
   pageSize: number;
 }
 
+export interface CsvExportResult {
+  destinationPath: string;
+  exportedCount: number;
+}
+
+export interface CsvImportPreviewRow {
+  line: number;
+  action: "create" | "update" | "unchanged" | "error";
+  faqManagementId: string | null;
+  title: string;
+  bodyWillBeReplaced: boolean;
+  staleUpdateWillOverwrite: boolean;
+  messages: string[];
+}
+
+export interface CsvImportPreview {
+  sourcePath: string;
+  fileSha256: string;
+  totalRows: number;
+  createCount: number;
+  updateCount: number;
+  unchangedCount: number;
+  bodyReplacementCount: number;
+  staleOverwriteCount: number;
+  errorCount: number;
+  rows: CsvImportPreviewRow[];
+}
+
+export interface CsvImportResult {
+  sourcePath: string;
+  safetyBackupPath: string;
+  createdCount: number;
+  updatedCount: number;
+  unchangedCount: number;
+}
+
 export interface SystemInfo {
   appVersion: string;
   dataRoot: string;
   databasePath: string;
+  codexCategoryCatalogPath: string;
+  codexInboxPath: string;
 }
 
 export type ColorTheme = "green" | "blue";
@@ -162,6 +263,11 @@ export type ColorTheme = "green" | "blue";
 export interface AppSettings {
   colorTheme: ColorTheme;
   showTopCategoryInTitle: boolean;
+  showMascot: boolean;
+}
+
+export interface PasswordPolicySettings {
+  allowEmptyPasswords: boolean;
 }
 
 export interface BackupCounts {

@@ -6,6 +6,7 @@ mod services;
 
 use std::{path::PathBuf, sync::Mutex};
 
+use models::AuthenticatedUser;
 use repositories::database::Database;
 use services::data_root::{DataRootService, find_git_root};
 use tauri::{Manager, Runtime};
@@ -13,6 +14,7 @@ use tauri::{Manager, Runtime};
 pub struct AppState {
     data_root: DataRootService,
     database: Mutex<Database>,
+    session: Mutex<Option<AuthenticatedUser>>,
 }
 
 pub fn run() {
@@ -33,13 +35,23 @@ pub fn run() {
             app.manage(AppState {
                 data_root,
                 database: Mutex::new(database),
+                session: Mutex::new(None),
             });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::login,
+            commands::logout,
+            commands::get_current_user,
+            commands::list_users,
+            commands::create_user,
+            commands::set_user_active,
+            commands::reset_user_password,
             commands::get_system_info,
             commands::get_settings,
             commands::save_settings,
+            commands::get_password_policy,
+            commands::save_password_policy,
             commands::list_categories,
             commands::create_category,
             commands::update_category,
@@ -50,6 +62,9 @@ pub fn run() {
             commands::reopen_rejected_codex_proposal,
             commands::create_codex_delegation,
             commands::get_article,
+            commands::get_codex_merge_publication_context,
+            commands::mark_codex_merge_sources,
+            commands::clear_article_merge,
             commands::search_articles,
             commands::save_article,
             commands::duplicate_article,
@@ -58,6 +73,9 @@ pub fn run() {
             commands::discard_staged_article_image,
             commands::open_external_url,
             commands::list_articles_for_management,
+            commands::export_faq_csv,
+            commands::inspect_faq_csv,
+            commands::import_faq_csv,
             commands::delete_article,
             commands::restore_article,
             commands::create_full_backup,

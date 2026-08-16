@@ -21,7 +21,7 @@ use crate::{
 
 const BACKUP_FORMAT_VERSION: u32 = 1;
 const RICH_TEXT_FORMAT_VERSION: u32 = 2;
-const CURRENT_SCHEMA_VERSION: i64 = 4;
+const CURRENT_SCHEMA_VERSION: i64 = 7;
 const MAX_ARCHIVE_FILES: usize = 10_000;
 const MAX_UNCOMPRESSED_BYTES: u64 = 10 * 1024 * 1024 * 1024;
 
@@ -192,6 +192,19 @@ pub fn restore_backup(
     restore_result
 }
 
+pub fn create_csv_import_safety_backup(
+    data_root: &DataRootService,
+    database: &Database,
+) -> AppResult<PathBuf> {
+    let display_name = format!(
+        "KnowledgeApp_before_csv_import_{}",
+        Utc::now().format("%Y%m%d_%H%M%S")
+    );
+    let destination = unique_safety_path(data_root, &display_name);
+    create_full_backup(data_root, database, &destination, &display_name, false)?;
+    Ok(destination)
+}
+
 fn build_archive(
     data_root: &DataRootService,
     database: &Database,
@@ -216,7 +229,7 @@ fn build_archive(
         return Err(AppError::new(
             "BK-004",
             "バックアップ対象のファイル数が多すぎます。",
-            "不要な添付画像や手順書を整理してから、もう一度実行してください。",
+            "不要な添付画像などの利用者データを整理してから、もう一度実行してください。",
         ));
     }
 
@@ -236,7 +249,7 @@ fn build_archive(
         return Err(AppError::new(
             "BK-004",
             "バックアップ対象の合計サイズが上限を超えています。",
-            "不要な添付画像や手順書を整理してから、もう一度実行してください。",
+            "不要な添付画像などの利用者データを整理してから、もう一度実行してください。",
         ));
     }
 

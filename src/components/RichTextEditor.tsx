@@ -85,7 +85,7 @@ function CopyBlockNodeView({ editor, node, getPos, selected, updateAttributes }:
   };
 
   const edit = () => {
-    const next = window.prompt("コピーする文字列を編集してください。", text);
+    const next = window.prompt("コピーする参照先・文字列を編集してください。", text);
     if (next === null || next === text) return;
     if (!next || Array.from(next).length > MAX_COPY_BLOCK_LENGTH) {
       window.alert(`コピー用テキストは1～${MAX_COPY_BLOCK_LENGTH.toLocaleString("ja-JP")}文字で入力してください。`);
@@ -111,7 +111,7 @@ function CopyBlockNodeView({ editor, node, getPos, selected, updateAttributes }:
       contentEditable={false}
     >
       <div className="copy-block-heading">
-        <span><span aria-hidden="true">▣</span> コピー用テキスト</span>
+        <span><span aria-hidden="true">▣</span> 参照先・コピー用テキスト</span>
         <div className="copy-block-actions">
           {editor.isEditable && (
             <>
@@ -425,7 +425,7 @@ export function RichTextEditor({
           <button
             type="button"
             className="wide-tool"
-            title="選択したネットワークパスなどを、閲覧時にワンクリックでコピーできる枠へ変換します"
+            title="選択したファイル・フォルダのパスなどを、自動で開かないコピー専用枠へ変換します"
             onClick={() => insertCopyBlockFromSelection(editor)}
             disabled={disabled}
           >
@@ -536,6 +536,7 @@ export function RichTextViewer({
               <div><dt>接続先</dt><dd>{pendingUrl.host}</dd></div>
               <div><dt>URL</dt><dd className="url-value">{pendingUrl.url}</dd></div>
             </dl>
+            <p className="url-open-note">この資料はKnowledgeAppの外で開きます。表示内容、JavaScript、ダウンロードは会社のブラウザーとネットワークのルールに従います。</p>
             {urlError && <p className="url-open-error" role="alert">{urlError}</p>}
             <div className="dialog-actions">
               <button type="button" className="button ghost" onClick={() => setPendingUrl(null)} disabled={openingUrl}>キャンセル</button>

@@ -1,8 +1,10 @@
 import type { ReactNode } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { FaqMascot } from "../components/FaqMascot";
+import { useDisplaySettings } from "./ColorTheme";
+import { useAuth } from "./AuthContext";
 
-type IconName = "search" | "plus" | "sparkles" | "list" | "folder" | "settings" | "check" | "shield";
+type IconName = "search" | "plus" | "sparkles" | "list" | "folder" | "settings" | "check" | "users";
 
 const navItems: Array<{ to: string; label: string; icon: IconName }> = [
   { to: "/search", label: "FAQを探す", icon: "search" },
@@ -22,13 +24,19 @@ function AppIcon({ name }: { name: IconName }) {
     folder: <path d="M3.5 7.5h6l2-2h9v13h-17z" />,
     settings: <><circle cx="12" cy="12" r="3" /><path d="M19 12a7.6 7.6 0 0 0-.1-1l2-1.6-2-3.4-2.5 1a8 8 0 0 0-1.7-1L14.3 3h-4.1L9.8 6a8 8 0 0 0-1.7 1L5.6 6 3.5 9.4l2 1.6a7.6 7.6 0 0 0 0 2l-2 1.6L5.6 18l2.5-1a8 8 0 0 0 1.7 1l.4 3h4.1l.4-3a8 8 0 0 0 1.7-1l2.5 1 2-3.4-2-1.6a7.6 7.6 0 0 0 .1-1z" /></>,
     check: <><circle cx="12" cy="12" r="8.5" /><path d="m8.5 12.2 2.2 2.2 4.8-5" /></>,
-    shield: <><path d="M12 3 19 6v5c0 4.4-2.7 7.8-7 10-4.3-2.2-7-5.6-7-10V6z" /><path d="m9 12 2 2 4-4" /></>,
+    users: <><circle cx="9" cy="8" r="3" /><path d="M3.5 19c.4-4 2.2-6 5.5-6s5.1 2 5.5 6M15 6.5a2.5 2.5 0 0 1 0 5M16 13c2.7.3 4.1 2.2 4.5 5" /></>,
   };
 
   return <svg viewBox="0 0 24 24" aria-hidden="true">{paths[name]}</svg>;
 }
 
 export function AppShell() {
+  const { showMascot, updateShowMascot } = useDisplaySettings();
+  const { user, logout } = useAuth();
+  const visibleNavItems = user?.role === "admin"
+    ? [...navItems, { to: "/users", label: "利用者の管理", icon: "users" as IconName }]
+    : navItems;
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -36,19 +44,23 @@ export function AppShell() {
           <span className="brand-mark" aria-hidden="true">K</span>
           <span>
             <strong>KnowledgeApp</strong>
-            <small>自分の知識を、すぐ見つかる形に</small>
+            <small>Knowledge Base</small>
           </span>
         </NavLink>
-        <div className="privacy-badge" title="FAQデータはこのPC内に保存されます">
-          <AppIcon name="check" />
-          ローカルに保存済み
+        <div className="topbar-account">
+          <div className="privacy-badge" title="FAQデータはこのPC内に保存されます">
+            <AppIcon name="check" />
+            ローカルに保存済み
+          </div>
+          <span className="signed-in-user">{user?.displayName}<small>{user?.loginId}</small></span>
+          <button type="button" className="button secondary compact" onClick={() => void logout()}>ログアウト</button>
         </div>
       </header>
 
       <div className="app-body">
         <nav className="side-nav" aria-label="メインメニュー">
           <div className="side-nav-main">
-            {navItems.map((item) => (
+            {visibleNavItems.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
@@ -59,20 +71,13 @@ export function AppShell() {
               </NavLink>
             ))}
           </div>
-          <div className="side-note">
-            <span className="side-note-icon" aria-hidden="true"><AppIcon name="shield" /></span>
-            <div>
-              <strong>安全のために</strong>
-              <p>パスワードや秘密鍵、個人情報はFAQへ登録しないでください。</p>
-            </div>
-          </div>
         </nav>
 
         <main className="main-content">
           <Outlet />
         </main>
+        <FaqMascot visible={showMascot} onRequestHide={() => updateShowMascot(false)} />
       </div>
-      <FaqMascot />
     </div>
   );
 }

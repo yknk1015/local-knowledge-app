@@ -30,7 +30,7 @@ $blockedRootNames = @(
     'codex-bridge'
 )
 $blockedRootPattern = '^(data|attachments|manuals|backup|backups|exports|logs|restore-staging|safety-backups|tmp|codex-inbox|codex-bridge)/'
-$blockedFilePattern = '(?i)(^|/)(knowledge\.db(?:-(?:wal|shm|journal))?|[^/]+\.(?:db|sqlite|sqlite3)(?:-(?:wal|shm|journal))?|[^/]+\.faqbackup(?:\.[^/]*)?|[^/]+\.knowledge-export\.json|[^/]+\.knowledge-proposal\.json|[^/]+\.knowledge-delegation\.json|[^/]+\.partial)$'
+$blockedFilePattern = '(?i)(^|/)(knowledge\.db(?:-(?:wal|shm|journal))?|[^/]+\.(?:db|sqlite|sqlite3)(?:-(?:wal|shm|journal))?|[^/]+\.faqbackup(?:\.[^/]*)?|[^/]+\.knowledge-export\.json|[^/]+\.knowledge-faq\.csv|[^/]+\.knowledge-proposal\.json|[^/]+\.knowledge-delegation\.json|[^/]+\.partial)$'
 $violations = [System.Collections.Generic.List[string]]::new()
 
 function Convert-ToRepositoryPath {

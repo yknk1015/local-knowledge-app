@@ -4,10 +4,19 @@ import { ColorThemeProvider } from "../app/ColorTheme";
 import { SettingsPage } from "./SettingsPage";
 
 const mocks = vi.hoisted(() => ({
+  currentUser: {
+    id: "initial-admin",
+    loginId: "0000",
+    displayName: "初期管理者",
+    role: "admin",
+    isActive: true,
+  },
   open: vi.fn(),
   save: vi.fn(),
   getSystemInfo: vi.fn(),
   getBackupOverview: vi.fn(),
+  getPasswordPolicy: vi.fn(),
+  savePasswordPolicy: vi.fn(),
   createFullBackup: vi.fn(),
   inspectBackup: vi.fn(),
   restoreBackup: vi.fn(),
@@ -20,6 +29,10 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   save: mocks.save,
 }));
 
+vi.mock("../app/AuthContext", () => ({
+  useAuth: () => ({ user: mocks.currentUser }),
+}));
+
 vi.mock("../api/knowledgeApi", async (importOriginal) => {
   const original = await importOriginal<typeof import("../api/knowledgeApi")>();
   return {
@@ -27,6 +40,8 @@ vi.mock("../api/knowledgeApi", async (importOriginal) => {
     knowledgeApi: {
       getSystemInfo: mocks.getSystemInfo,
       getBackupOverview: mocks.getBackupOverview,
+      getPasswordPolicy: mocks.getPasswordPolicy,
+      savePasswordPolicy: mocks.savePasswordPolicy,
       createFullBackup: mocks.createFullBackup,
       inspectBackup: mocks.inspectBackup,
       restoreBackup: mocks.restoreBackup,
@@ -47,18 +62,29 @@ function renderPage() {
 describe("SettingsPage backup operations", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    Object.assign(mocks.currentUser, {
+      id: "initial-admin",
+      loginId: "0000",
+      displayName: "初期管理者",
+      role: "admin",
+      isActive: true,
+    });
     Element.prototype.scrollIntoView = vi.fn();
     mocks.getSystemInfo.mockResolvedValue({
       appVersion: "0.1.0",
       dataRoot: "C:\\AppData\\KnowledgeApp",
       databasePath: "C:\\AppData\\KnowledgeApp\\data\\knowledge.db",
+      codexCategoryCatalogPath: "C:\\AppData\\KnowledgeApp\\codex-bridge\\categories.json",
+      codexInboxPath: "C:\\AppData\\KnowledgeApp\\codex-inbox",
     });
     mocks.getBackupOverview.mockResolvedValue({
       estimatedBytes: 4096,
       counts: { articles: 4, categories: 2, attachments: 0, manuals: 0 },
       defaultDirectory: "D:\\Backup",
     });
-    mocks.getSettings.mockResolvedValue({ colorTheme: "green", showTopCategoryInTitle: true });
+    mocks.getPasswordPolicy.mockResolvedValue({ allowEmptyPasswords: true });
+    mocks.savePasswordPolicy.mockImplementation(async (settings) => settings);
+    mocks.getSettings.mockResolvedValue({ colorTheme: "green", showTopCategoryInTitle: true, showMascot: true });
     mocks.saveSettings.mockImplementation(async (settings) => settings);
     document.documentElement.dataset.colorTheme = "green";
   });
@@ -72,12 +98,13 @@ describe("SettingsPage backup operations", () => {
     expect(mocks.saveSettings).toHaveBeenCalledWith({
       colorTheme: "blue",
       showTopCategoryInTitle: true,
+      showMascot: true,
     });
     expect(screen.getByText("ブルーを使用中")).toBeInTheDocument();
   });
 
   it("restores the saved color theme when the page opens", async () => {
-    mocks.getSettings.mockResolvedValue({ colorTheme: "blue", showTopCategoryInTitle: true });
+    mocks.getSettings.mockResolvedValue({ colorTheme: "blue", showTopCategoryInTitle: true, showMascot: true });
     renderPage();
 
     await waitFor(() => expect(document.documentElement.dataset.colorTheme).toBe("blue"));
@@ -96,8 +123,58 @@ describe("SettingsPage backup operations", () => {
     expect(mocks.saveSettings).toHaveBeenCalledWith({
       colorTheme: "green",
       showTopCategoryInTitle: false,
+      showMascot: true,
     });
     expect(screen.getByText("現在はOFFです")).toBeInTheDocument();
+  });
+
+  it("turns the FAQ mascot off and persists the display setting", async () => {
+    renderPage();
+
+    const checkbox = await screen.findByRole("checkbox", { name: /マスコットを表示する/ });
+    expect(checkbox).toBeChecked();
+    fireEvent.click(checkbox);
+
+    await waitFor(() => expect(checkbox).not.toBeChecked());
+    expect(mocks.saveSettings).toHaveBeenCalledWith({
+      colorTheme: "green",
+      showTopCategoryInTitle: true,
+      showMascot: false,
+    });
+  });
+
+  it("shows the fixed Codex storage paths as read-only information", async () => {
+    renderPage();
+
+    const storage = await screen.findByRole("region", { name: "Codex連携用の保存先" });
+    expect(storage).toHaveTextContent("参照のみ");
+    expect(storage).toHaveTextContent("設定画面からは変更できません");
+    expect(storage).toHaveTextContent("C:\\AppData\\KnowledgeApp\\codex-bridge\\categories.json");
+    expect(storage).toHaveTextContent("C:\\AppData\\KnowledgeApp\\codex-inbox");
+    expect(storage.querySelector("input, select, textarea, button")).toBeNull();
+  });
+
+  it("keeps backup and restore operations unavailable to a general user", async () => {
+    Object.assign(mocks.currentUser, { id: "general-user", loginId: "1000", role: "user" });
+    renderPage();
+
+    expect(screen.queryByRole("button", { name: "フルバックアップを作成" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "バックアップから復元" })).not.toBeInTheDocument();
+    expect(screen.getByText("利用者情報を含むため、バックアップと復元は管理者だけが操作できます。")).toBeInTheDocument();
+    expect(mocks.getBackupOverview).not.toHaveBeenCalled();
+    expect(mocks.getPasswordPolicy).not.toHaveBeenCalled();
+  });
+
+  it("requires passwords for future user changes after an admin turns empty passwords off", async () => {
+    renderPage();
+
+    const checkbox = await screen.findByRole("checkbox", { name: /空欄のパスワードを許可する/ });
+    expect(checkbox).toBeChecked();
+    fireEvent.click(checkbox);
+
+    await waitFor(() => expect(checkbox).not.toBeChecked());
+    expect(mocks.savePasswordPolicy).toHaveBeenCalledWith({ allowEmptyPasswords: false });
+    expect(screen.getByText("現在は許可していません")).toBeInTheDocument();
   });
 
   it("returns to the previous theme when saving fails", async () => {
@@ -129,6 +206,7 @@ describe("SettingsPage backup operations", () => {
     fireEvent.click(screen.getByRole("button", { name: "フルバックアップを作成" }));
 
     expect(await screen.findByText("フルバックアップを作成しました")).toBeInTheDocument();
+    expect(screen.getByText(/会社管理の外部資料本体は含みません/)).toBeInTheDocument();
     expect(mocks.createFullBackup).toHaveBeenCalledWith(
       "D:\\Backup\\会社FAQ.faqbackup",
       "会社FAQ",

@@ -32,14 +32,14 @@ export function EmptyState({
   action,
 }: {
   title: string;
-  description: string;
+  description?: string;
   action?: React.ReactNode;
 }) {
   return (
     <div className="empty-state">
       <div className="empty-illustration" aria-hidden="true">◇</div>
       <h2>{title}</h2>
-      <p>{description}</p>
+      {description && <p>{description}</p>}
       {action}
     </div>
   );

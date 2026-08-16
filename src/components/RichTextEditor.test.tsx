@@ -132,12 +132,14 @@ describe("RichTextViewer", () => {
     expect(await screen.findByRole("dialog")).toBeVisible();
     expect(screen.getByText("example.com")).toBeVisible();
     expect(screen.getByText("https://example.com/")).toBeVisible();
+    expect(screen.getByText(/KnowledgeAppの外で開きます/)).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "既定ブラウザーで開く" }));
     await waitFor(() => expect(openExternalUrl).toHaveBeenCalledWith("https://example.com/"));
   });
 
   it("copies copy-block text exactly without opening it", async () => {
     const copyText = String.raw`\\192.168.1.250\業務用フォルダ\情報があり得ないほど詰まった古いファイル.xlsx`;
+    const openExternalUrl = vi.spyOn(knowledgeApi, "openExternalUrl").mockResolvedValue(undefined);
     writeTextMock.mockResolvedValue(undefined);
     render(
       <RichTextViewer
@@ -152,5 +154,7 @@ describe("RichTextViewer", () => {
 
     await waitFor(() => expect(writeTextMock).toHaveBeenCalledWith(copyText));
     expect(screen.getByRole("button", { name: "コピーしました" })).toBeVisible();
+    expect(screen.getByText("参照先・コピー用テキスト")).toBeVisible();
+    expect(openExternalUrl).not.toHaveBeenCalled();
   });
 });

@@ -48,6 +48,7 @@
 *.faqbackup
 *.faqbackup.*
 *.knowledge-export.json
+*.knowledge-faq.csv
 *.knowledge-proposal.json
 *.knowledge-delegation.json
 *.partial

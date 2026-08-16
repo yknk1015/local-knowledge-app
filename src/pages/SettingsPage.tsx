@@ -1,6 +1,7 @@
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useEffect, useRef, useState } from "react";
 import { knowledgeApi, toAppError } from "../api/knowledgeApi";
+import { useAuth } from "../app/AuthContext";
 import { useDisplaySettings } from "../app/ColorTheme";
 import { ErrorState, LoadingState } from "../components/Feedback";
 import type {
@@ -8,6 +9,7 @@ import type {
   BackupOverview,
   BackupPreview,
   BackupResult,
+  PasswordPolicySettings,
   RestoreResult,
   SystemInfo,
   ColorTheme,
@@ -37,11 +39,15 @@ function formatBytes(value: number) {
 }
 
 export function SettingsPage() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const {
     colorTheme,
     showTopCategoryInTitle,
+    showMascot,
     updateColorTheme,
     updateShowTopCategoryInTitle,
+    updateShowMascot,
   } = useDisplaySettings();
   const [info, setInfo] = useState<SystemInfo | null>(null);
   const [overview, setOverview] = useState<BackupOverview | null>(null);
@@ -55,13 +61,23 @@ export function SettingsPage() {
   const [themeSaving, setThemeSaving] = useState(false);
   const [titleDisplayError, setTitleDisplayError] = useState<AppError | null>(null);
   const [titleDisplaySaving, setTitleDisplaySaving] = useState(false);
+  const [mascotDisplayError, setMascotDisplayError] = useState<AppError | null>(null);
+  const [mascotDisplaySaving, setMascotDisplaySaving] = useState(false);
+  const [passwordPolicy, setPasswordPolicy] = useState<PasswordPolicySettings | null>(null);
+  const [passwordPolicyError, setPasswordPolicyError] = useState<AppError | null>(null);
+  const [passwordPolicySaving, setPasswordPolicySaving] = useState(false);
   const feedbackRef = useRef<HTMLDivElement>(null);
-  const displaySettingsSaving = themeSaving || titleDisplaySaving;
+  const displaySettingsSaving = themeSaving || titleDisplaySaving || mascotDisplaySaving;
 
   useEffect(() => {
     knowledgeApi.getSystemInfo().then(setInfo).catch((caught) => setInfoError(toAppError(caught)));
-    knowledgeApi.getBackupOverview().then(setOverview).catch(() => setOverview(null));
-  }, []);
+    if (isAdmin) {
+      knowledgeApi.getBackupOverview().then(setOverview).catch(() => setOverview(null));
+      knowledgeApi.getPasswordPolicy()
+        .then(setPasswordPolicy)
+        .catch((caught) => setPasswordPolicyError(toAppError(caught)));
+    }
+  }, [isAdmin]);
 
   useEffect(() => {
     if (operationError || backupResult || restoreResult) {
@@ -179,12 +195,41 @@ export function SettingsPage() {
     }
   };
 
+  const changeMascotDisplay = async (enabled: boolean) => {
+    if (enabled === showMascot || displaySettingsSaving) return;
+    setMascotDisplayError(null);
+    setMascotDisplaySaving(true);
+    try {
+      await updateShowMascot(enabled);
+    } catch (caught) {
+      setMascotDisplayError(toAppError(caught));
+    } finally {
+      setMascotDisplaySaving(false);
+    }
+  };
+
+  const changeAllowEmptyPasswords = async (enabled: boolean) => {
+    if (!passwordPolicy || enabled === passwordPolicy.allowEmptyPasswords || passwordPolicySaving) return;
+    const previous = passwordPolicy;
+    setPasswordPolicyError(null);
+    setPasswordPolicySaving(true);
+    setPasswordPolicy({ allowEmptyPasswords: enabled });
+    try {
+      setPasswordPolicy(await knowledgeApi.savePasswordPolicy({ allowEmptyPasswords: enabled }));
+    } catch (caught) {
+      setPasswordPolicy(previous);
+      setPasswordPolicyError(toAppError(caught));
+    } finally {
+      setPasswordPolicySaving(false);
+    }
+  };
+
   return (
     <div className="page settings-page">
       <div className="page-heading">
         <span className="eyebrow">表示・バックアップ・端末情報</span>
         <h1>設定・情報</h1>
-        <p>画面の配色と検索結果のタイトル表示を選び、FAQ一式のバックアップ・復元とデータの保存状態を確認できます。</p>
+        <p>画面表示を選び、データとCodex連携用の保存先を確認できます。バックアップと復元は管理者が操作できます。</p>
       </div>
 
       <section className="panel appearance-panel" aria-labelledby="appearance-heading">
@@ -280,14 +325,76 @@ export function SettingsPage() {
           </label>
         </div>
         {titleDisplayError && <ErrorState error={titleDisplayError} />}
+
+        <div className="title-display-setting mascot-display-setting">
+          <div>
+            <span className="eyebrow">左下のマスコット</span>
+            <h3>FAQ Owlの表示</h3>
+            <p>OFFにすると全画面で非表示になります。マスコットを右クリックして非表示にした場合も、ここから再表示できます。</p>
+          </div>
+          <label className="title-display-toggle">
+            <input
+              type="checkbox"
+              checked={showMascot}
+              disabled={displaySettingsSaving}
+              onChange={(event) => void changeMascotDisplay(event.target.checked)}
+            />
+            <span>
+              <strong>マスコットを表示する</strong>
+              <small aria-live="polite">
+                {mascotDisplaySaving
+                  ? "保存しています…"
+                  : showMascot
+                    ? "現在はONです"
+                    : "現在はOFFです"}
+              </small>
+            </span>
+          </label>
+        </div>
+        {mascotDisplayError && <ErrorState error={mascotDisplayError} />}
       </section>
 
+      {isAdmin && (
+        <section className="panel appearance-panel password-policy-panel" aria-labelledby="password-policy-heading">
+          <div className="title-display-setting">
+            <div>
+              <span className="eyebrow">管理者向け</span>
+              <h2 id="password-policy-heading">利用者パスワードの設定</h2>
+              <p>OFFにすると、以後の利用者追加とパスワード再設定で1文字以上の入力が必須になります。すでに空欄で登録済みの利用者は変更されません。</p>
+            </div>
+            {passwordPolicy && (
+              <label className="title-display-toggle">
+                <input
+                  type="checkbox"
+                  checked={passwordPolicy.allowEmptyPasswords}
+                  disabled={passwordPolicySaving}
+                  onChange={(event) => void changeAllowEmptyPasswords(event.target.checked)}
+                />
+                <span>
+                  <strong>空欄のパスワードを許可する</strong>
+                  <small aria-live="polite">
+                    {passwordPolicySaving
+                      ? "保存しています…"
+                      : passwordPolicy.allowEmptyPasswords
+                        ? "現在は許可しています"
+                        : "現在は許可していません"}
+                  </small>
+                </span>
+              </label>
+            )}
+          </div>
+          {!passwordPolicy && !passwordPolicyError && <LoadingState label="パスワード設定を読み込んでいます…" />}
+          {passwordPolicyError && <ErrorState error={passwordPolicyError} />}
+        </section>
+      )}
+
+      {isAdmin ? (
       <section className="panel backup-panel" aria-labelledby="backup-heading">
         <div className="backup-intro">
           <div>
             <span className="eyebrow">大切なFAQを守る</span>
             <h2 id="backup-heading">フルバックアップと復元</h2>
-            <p>FAQ、分類、履歴、設定、添付画像、手順書を1つのファイルにまとめます。</p>
+            <p>FAQ、分類、履歴、設定、添付画像を1つのファイルにまとめます。会社管理の外部資料本体は含みません。</p>
           </div>
           <div className="backup-actions">
             <button type="button" className="button primary large" onClick={createBackup} disabled={busy}>
@@ -304,7 +411,6 @@ export function SettingsPage() {
             <div><dt>FAQ</dt><dd>{overview.counts.articles}件</dd></div>
             <div><dt>分類</dt><dd>{overview.counts.categories}件</dd></div>
             <div><dt>添付画像</dt><dd>{overview.counts.attachments}件</dd></div>
-            <div><dt>手順書</dt><dd>{overview.counts.manuals}件</dd></div>
             <div><dt>推定サイズ</dt><dd>約 {formatBytes(overview.estimatedBytes)}</dd></div>
           </dl>
         )}
@@ -355,13 +461,23 @@ export function SettingsPage() {
               <div><dt>FAQ</dt><dd>{preview.counts.articles}件</dd></div>
               <div><dt>分類</dt><dd>{preview.counts.categories}件</dd></div>
               <div><dt>添付画像</dt><dd>{preview.counts.attachments}件</dd></div>
-              <div><dt>手順書</dt><dd>{preview.counts.manuals}件</dd></div>
               <div><dt>データサイズ</dt><dd>{formatBytes(preview.totalBytes)}</dd></div>
             </dl>
-            <p className="restore-note">復元を開始する前に、現在の状態をPC内へ自動退避します。破損や形式不一致があるファイルは復元しません。</p>
+            <p className="restore-note">復元を開始する前に、現在の状態をPC内へ自動退避します。破損や形式不一致があるファイルは復元しません。会社管理の外部資料本体は復元対象外です。</p>
           </div>
         )}
       </section>
+      ) : (
+        <section className="panel backup-panel" aria-labelledby="backup-heading">
+          <div className="backup-intro">
+            <div>
+              <span className="eyebrow">管理者向け機能</span>
+              <h2 id="backup-heading">フルバックアップと復元</h2>
+              <p>利用者情報を含むため、バックアップと復元は管理者だけが操作できます。</p>
+            </div>
+          </div>
+        </section>
+      )}
 
       {!info && !infoError && <LoadingState label="端末情報を読み込んでいます…" />}
       {infoError && <ErrorState error={infoError} />}
@@ -379,6 +495,25 @@ export function SettingsPage() {
               <h2>データ保存先</h2>
               <code className="path-display">{info.dataRoot}</code>
               <p className="subtle">データベース：{info.databasePath}</p>
+            </div>
+          </section>
+          <section className="panel setting-card codex-storage-card" aria-labelledby="codex-storage-heading">
+            <div>
+              <div className="setting-card-heading">
+                <h2 id="codex-storage-heading">Codex連携用の保存先</h2>
+                <span className="readonly-badge">参照のみ</span>
+              </div>
+              <p>安全性と連携の整合性を保つため、アプリが管理する固定場所を使用します。設定画面からは変更できません。</p>
+              <dl className="codex-storage-paths">
+                <div>
+                  <dt>分類一覧</dt>
+                  <dd><code className="path-display">{info.codexCategoryCatalogPath}</code></dd>
+                </div>
+                <div>
+                  <dt>提案箱</dt>
+                  <dd><code className="path-display">{info.codexInboxPath}</code></dd>
+                </div>
+              </dl>
             </div>
           </section>
           <section className="panel setting-card">

@@ -682,7 +682,12 @@ mod tests {
             is_hidden: false,
             created_at: updated_at.clone(),
             updated_at: updated_at.clone(),
+            created_by_user_id: "user-1".into(),
+            created_by_display_name: "利用者".into(),
+            updated_by_user_id: "user-1".into(),
+            updated_by_display_name: "利用者".into(),
             deleted_at: None,
+            merge_info: None,
             attachments: vec![crate::models::ArticleAttachment {
                 id: Uuid::now_v7().to_string(),
                 original_name: "screen.png".into(),

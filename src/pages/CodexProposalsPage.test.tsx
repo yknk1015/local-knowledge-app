@@ -78,6 +78,28 @@ describe("CodexProposalsPage", () => {
     });
   });
 
+  it("shows the concise heading and only the pending empty-state title", async () => {
+    mocks.listCodexProposals.mockResolvedValue({
+      proposals: [],
+      history: [],
+      rejected: [],
+      inboxPath: "C:\\local\\codex-inbox",
+      categoryCatalogPath: "C:\\local\\codex-bridge\\categories.json",
+    });
+
+    render(<MemoryRouter><CodexProposalsPage /></MemoryRouter>);
+
+    expect(await screen.findByRole("heading", { name: "Codexからの提案" })).toBeInTheDocument();
+    expect(screen.getByText("新規下書き、既存FAQの推敲・修正、複数FAQの統合案を確認できます。")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "確認待ちの提案はありません" })).toBeInTheDocument();
+    expect(screen.queryByText("内容を確認してから反映する")).not.toBeInTheDocument();
+    expect(screen.queryByText("Codexが直接データベースを変更することはありません。", { exact: false })).not.toBeInTheDocument();
+    expect(screen.queryByText("Codexへの委譲方針")).not.toBeInTheDocument();
+    expect(screen.queryByText("従量課金APIをアプリへ組み込まず", { exact: false })).not.toBeInTheDocument();
+    expect(screen.queryByText("新規FAQはCodexへ直接依頼できます。", { exact: false })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Codex連携用の保存先" })).not.toBeInTheDocument();
+  });
+
   it("keeps a rejected proposal in history and can reopen the latest item", async () => {
     mocks.listCodexProposals
       .mockResolvedValueOnce({

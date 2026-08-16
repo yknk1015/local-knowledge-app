@@ -206,17 +206,11 @@ export function CodexProposalsPage() {
     <div className="page codex-page">
       <div className="page-heading split">
         <div>
-          <span className="eyebrow">内容を確認してから反映する</span>
           <h1>Codexからの提案</h1>
-          <p>新規下書き、既存FAQの推敲・修正、複数FAQの統合案を確認できます。Codexが直接データベースを変更することはありません。</p>
+          <p>新規下書き、既存FAQの推敲・修正、複数FAQの統合案を確認できます。</p>
         </div>
         <button type="button" className="button secondary" onClick={() => void load()} disabled={loading || busy}>提案を更新</button>
       </div>
-
-      <aside className="detail-safety-note codex-safety-note">
-        <strong>Codexへの委譲方針</strong>
-        <p>従量課金APIをアプリへ組み込まず、利用者が必要なときだけ定額利用のCodexへ依頼します。既存FAQは、アプリで明示的に委譲した対象だけを渡します。</p>
-      </aside>
 
       <div className="management-tabs" role="tablist" aria-label="Codex提案の状態">
         <button type="button" role="tab" aria-selected={tab === "pending"} className={tab === "pending" ? "active" : ""} onClick={() => setTab("pending")}>
@@ -236,21 +230,12 @@ export function CodexProposalsPage() {
       )}
 
       {inbox && currentItems.length === 0 && (
-        <>
-          <EmptyState
-            title={tab === "pending" ? "確認待ちの提案はありません" : "承認・却下履歴はありません"}
-            description={tab === "pending"
-              ? "新規FAQはCodexへ直接依頼できます。既存FAQの修正はFAQ詳細、統合はFAQ管理画面から委譲番号を作成してください。"
-              : "提案を承認または却下すると、ここから後で内容を確認できます。"}
-          />
-          {tab === "pending" && (
-            <section className="panel codex-paths">
-              <h2>Codex連携用の保存先</h2>
-              <p>分類一覧</p><code>{inbox.categoryCatalogPath}</code>
-              <p>提案箱</p><code>{inbox.inboxPath}</code>
-            </section>
-          )}
-        </>
+        <EmptyState
+          title={tab === "pending" ? "確認待ちの提案はありません" : "承認・却下履歴はありません"}
+          description={tab === "pending"
+            ? undefined
+            : "提案を承認または却下すると、ここから後で内容を確認できます。"}
+        />
       )}
 
       {inbox && currentItems.length > 0 && selected && (

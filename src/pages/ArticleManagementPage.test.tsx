@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   restoreArticle: vi.fn(),
   duplicateArticle: vi.fn(),
   createCodexDelegation: vi.fn(),
+  clearArticleMerge: vi.fn(),
 }));
 
 vi.mock("../api/knowledgeApi", async (importOriginal) => {
@@ -32,7 +33,10 @@ const article = {
   updatedBadgeUntil: null,
   isHidden: false,
   updatedAt: "2026-08-08T12:00:00Z",
+  createdByDisplayName: "作成担当",
+  updatedByDisplayName: "更新担当",
   deletedAt: null,
+  mergeInfo: null,
 };
 
 describe("ArticleManagementPage", () => {
@@ -52,7 +56,14 @@ describe("ArticleManagementPage", () => {
     render(<MemoryRouter><ArticleManagementPage /></MemoryRouter>);
 
     expect(await screen.findByText("画面が暗い")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "削除" }));
+    expect(screen.getByRole("button", { name: "通常" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByTitle("作成担当")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "詳細" }));
+    expect(screen.getByTitle("作成担当")).toBeVisible();
+    expect(screen.getByTitle("更新担当")).toBeVisible();
+    expect(screen.getByRole("columnheader", { name: "作成者・更新者" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "「画面が暗い」のその他の操作" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "削除" }));
 
     await waitFor(() => expect(mocks.deleteArticle).toHaveBeenCalledWith("article-1"));
     expect(window.confirm).toHaveBeenCalled();
@@ -94,5 +105,30 @@ describe("ArticleManagementPage", () => {
 
     await waitFor(() => expect(mocks.createCodexDelegation).toHaveBeenCalledWith("merge", ["article-1", "article-2"]));
     expect(await screen.findByText(/KnowledgeAppの委譲番号 delegation-id/)).toBeInTheDocument();
+  });
+
+  it("shows the integrated target, prevents re-selection, and can clear the relation", async () => {
+    const mergedSource = {
+      ...article,
+      mergeInfo: {
+        targetArticleId: "target-article",
+        targetArticleTitle: "統合先FAQ",
+        mergedAt: "2026-08-15T01:00:00Z",
+      },
+    };
+    mocks.listArticlesForManagement
+      .mockResolvedValueOnce({ items: [mergedSource], total: 1, page: 1, pageSize: 50 })
+      .mockResolvedValueOnce({ items: [article], total: 1, page: 1, pageSize: 50 });
+    mocks.clearArticleMerge.mockResolvedValue(article);
+    render(<MemoryRouter><ArticleManagementPage /></MemoryRouter>);
+
+    expect(await screen.findByText("統合済み")).toBeVisible();
+    expect(screen.getByText("統合先FAQ")).toBeVisible();
+    expect(screen.getByRole("checkbox", { name: /「画面が暗い」/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "「画面が暗い」のその他の操作" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "統合を解除" }));
+
+    await waitFor(() => expect(mocks.clearArticleMerge).toHaveBeenCalledWith("article-1"));
+    expect(await screen.findByText("「画面が暗い」の統合済み設定を解除しました。")).toBeVisible();
   });
 });

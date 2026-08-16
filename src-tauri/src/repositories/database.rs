@@ -1,18 +1,27 @@
-use std::{path::Path, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    path::Path,
+    time::Duration,
+};
 
-use chrono::Utc;
+use chrono::{NaiveDate, Utc};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, backup::Backup, params};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 
 use crate::{
     errors::{AppError, AppResult},
     models::{
-        AppSettings, Article, ArticleAttachment, ArticleListItem, BackupCounts, Category,
-        CodexFaqProposal, CodexProposalHistoryItem, CodexProposalKind, CodexSourceArticle,
+        AppSettings, Article, ArticleAttachment, ArticleListItem, ArticleMergeInfo,
+        AuthenticatedUser, BackupCounts, Category, CodexFaqProposal, CodexMergePublicationContext,
+        CodexMergeSourcePreview, CodexProposalHistoryItem, CodexProposalKind, CodexSourceArticle,
+        CsvExportResult, CsvImportPreview, CsvImportPreviewRow, CsvImportResult,
         ManagementArticleListItem, ManagementArticlePage, ManagementArticlesInput,
-        SearchArticlesInput,
+        MarkCodexMergeSourcesResult, PasswordPolicySettings, SearchArticlePage,
+        SearchArticlesInput, UserRole, UserSummary,
     },
 };
 
@@ -22,8 +31,74 @@ const ARTICLE_DISPLAY_FLAGS_MIGRATION: &str =
 const CODEX_PROPOSALS_MIGRATION: &str = include_str!("../../migrations/0003_codex_proposals.sql");
 const CODEX_DELEGATION_HISTORY_MIGRATION: &str =
     include_str!("../../migrations/0004_codex_delegation_history.sql");
-const CURRENT_SCHEMA_VERSION: i64 = 4;
+const ARTICLE_MERGE_RELATIONS_MIGRATION: &str =
+    include_str!("../../migrations/0005_article_merge_relations.sql");
+const USERS_AND_ARTICLE_AUDIT_MIGRATION: &str =
+    include_str!("../../migrations/0006_users_and_article_audit.sql");
+const MANAGEMENT_CODES_MIGRATION: &str = include_str!("../../migrations/0007_management_codes.sql");
+const CURRENT_SCHEMA_VERSION: i64 = 7;
 const APPEARANCE_SETTINGS_KEY: &str = "appearance";
+const PASSWORD_POLICY_SETTINGS_KEY: &str = "password_policy";
+const INITIAL_ADMIN_USER_ID: &str = "00000000-0000-7000-8000-000000000000";
+type CodexMergeSourceRow = (String, String, String, Option<String>, Option<String>);
+
+#[derive(Debug, Clone)]
+struct CsvImportPlanRow {
+    line: usize,
+    action: CsvRowAction,
+    faq_management_id: Option<String>,
+    article_id: String,
+    category_id: String,
+    title: String,
+    summary: String,
+    body_plain_text: String,
+    body_doc_json: String,
+    body_will_be_replaced: bool,
+    status: String,
+    importance: i64,
+    new_badge_until: Option<String>,
+    updated_badge_until: Option<String>,
+    is_hidden: bool,
+    stale_update_will_overwrite: bool,
+    messages: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CsvRowAction {
+    Create,
+    Update,
+    Unchanged,
+    Error,
+}
+
+#[derive(Debug)]
+struct ExistingCsvArticle {
+    article_id: String,
+    category_id: String,
+    title: String,
+    summary: String,
+    body_plain_text: String,
+    body_doc_json: String,
+    status: String,
+    importance: i64,
+    new_badge_until: Option<String>,
+    updated_badge_until: Option<String>,
+    is_hidden: bool,
+    updated_at: String,
+    has_attachments: bool,
+    is_merge_target: bool,
+}
+
+impl CsvRowAction {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Create => "create",
+            Self::Update => "update",
+            Self::Unchanged => "unchanged",
+            Self::Error => "error",
+        }
+    }
+}
 
 pub struct Database {
     connection: Connection,
@@ -105,6 +180,7 @@ impl Database {
             .map_err(|_| AppError::database("データベースの初期設定に失敗しました。"))?;
         let database = Self { connection };
         database.apply_migrations()?;
+        database.ensure_initial_admin()?;
         Ok(database)
     }
 
@@ -138,6 +214,7 @@ impl Database {
             .execute_batch("PRAGMA foreign_keys = ON;\nPRAGMA journal_mode = WAL;\nPRAGMA synchronous = NORMAL;")
             .map_err(AppError::from)?;
         self.apply_migrations()?;
+        self.ensure_initial_admin()?;
         self.quick_check()
     }
 
@@ -215,7 +292,757 @@ impl Database {
                 .execute_batch(CODEX_DELEGATION_HISTORY_MIGRATION)
                 .map_err(|_| AppError::database("Codex委譲・履歴用データの更新に失敗しました。"))?;
         }
+        if version < 5 {
+            self.connection
+                .execute_batch(ARTICLE_MERGE_RELATIONS_MIGRATION)
+                .map_err(|_| AppError::database("FAQ統合関係用データの更新に失敗しました。"))?;
+        }
+        if version < 6 {
+            self.connection
+                .execute_batch(USERS_AND_ARTICLE_AUDIT_MIGRATION)
+                .map_err(|_| AppError::database("利用者・FAQ更新者データの更新に失敗しました。"))?;
+        }
+        if version < 7 {
+            self.connection
+                .execute_batch(MANAGEMENT_CODES_MIGRATION)
+                .map_err(|_| AppError::database("FAQ・分類管理IDの更新に失敗しました。"))?;
+        }
         Ok(())
+    }
+
+    fn ensure_initial_admin(&self) -> AppResult<()> {
+        let user_count: i64 =
+            self.connection
+                .query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))?;
+        if user_count == 0 {
+            let now = Utc::now().to_rfc3339();
+            let password_hash = crate::services::auth::hash_password("")?;
+            self.connection.execute(
+                r#"
+                INSERT INTO users(
+                    id, login_id, normalized_login_id, display_name, password_hash,
+                    role, is_active, created_at, updated_at
+                ) VALUES (?1, '0000', '0000', '初期管理者', ?2, 'admin', 1, ?3, ?3)
+                "#,
+                params![INITIAL_ADMIN_USER_ID, password_hash, now],
+            )?;
+        }
+        self.connection.execute(
+            "UPDATE articles SET created_by_user_id = COALESCE(created_by_user_id, ?1), updated_by_user_id = COALESCE(updated_by_user_id, ?1)",
+            [INITIAL_ADMIN_USER_ID],
+        )?;
+        Ok(())
+    }
+
+    pub fn authenticate_user(
+        &self,
+        login_id: &str,
+        password: &str,
+    ) -> AppResult<AuthenticatedUser> {
+        if login_id.chars().count() > 100 || password.chars().count() > 1024 {
+            return Err(crate::services::auth::authentication_error());
+        }
+        let normalized = crate::services::auth::normalize_login_id(login_id);
+        let record: Option<(String, String, String, String, bool)> = self.connection.query_row(
+            "SELECT id, login_id, display_name, role, is_active FROM users WHERE normalized_login_id = ?1",
+            [&normalized],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        ).optional()?;
+        let Some((id, login_id, display_name, role, is_active)) = record else {
+            return Err(crate::services::auth::authentication_error());
+        };
+        if !is_active {
+            return Err(crate::services::auth::authentication_error());
+        }
+        let password_hash: String = self.connection.query_row(
+            "SELECT password_hash FROM users WHERE id = ?1",
+            [&id],
+            |row| row.get(0),
+        )?;
+        if !crate::services::auth::verify_password(password, &password_hash) {
+            return Err(crate::services::auth::authentication_error());
+        }
+        self.connection.execute(
+            "UPDATE users SET last_login_at = ?2 WHERE id = ?1",
+            params![id, Utc::now().to_rfc3339()],
+        )?;
+        Ok(AuthenticatedUser {
+            id,
+            login_id,
+            display_name,
+            role: parse_user_role(&role)?,
+        })
+    }
+
+    pub fn list_users(&self) -> AppResult<Vec<UserSummary>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, login_id, display_name, role, is_active, created_at, updated_at, last_login_at FROM users ORDER BY created_at, login_id"
+        )?;
+        let rows = statement.query_map([], |row| {
+            let role: String = row.get(3)?;
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                role,
+                row.get::<_, bool>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, Option<String>>(7)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (
+                id,
+                login_id,
+                display_name,
+                role,
+                is_active,
+                created_at,
+                updated_at,
+                last_login_at,
+            ) = row?;
+            Ok(UserSummary {
+                id,
+                login_id,
+                display_name,
+                role: parse_user_role(&role)?,
+                is_active,
+                created_at,
+                updated_at,
+                last_login_at,
+            })
+        })
+        .collect()
+    }
+
+    pub fn create_user(
+        &self,
+        login_id: &str,
+        display_name: &str,
+        password: &str,
+        role: UserRole,
+    ) -> AppResult<UserSummary> {
+        self.ensure_password_allowed(password)?;
+        let login_id = validate_user_text(login_id, "ログインID")?;
+        let display_name = validate_user_text(display_name, "表示名")?;
+        let normalized = crate::services::auth::normalize_login_id(login_id);
+        let duplicate: bool = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM users WHERE normalized_login_id = ?1)",
+            [&normalized],
+            |row| row.get(0),
+        )?;
+        if duplicate {
+            return Err(AppError::new(
+                "USR-001",
+                "同じログインIDがすでに登録されています。",
+                "別のログインIDを入力してください。",
+            ));
+        }
+        let id = Uuid::now_v7().to_string();
+        let now = Utc::now().to_rfc3339();
+        let password_hash = crate::services::auth::hash_password(password)?;
+        self.connection.execute(
+            "INSERT INTO users(id, login_id, normalized_login_id, display_name, password_hash, role, is_active, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?7)",
+            params![id, login_id, normalized, display_name, password_hash, role.as_str(), now],
+        )?;
+        Ok(UserSummary {
+            id,
+            login_id: login_id.to_owned(),
+            display_name: display_name.to_owned(),
+            role,
+            is_active: true,
+            created_at: now.clone(),
+            updated_at: now,
+            last_login_at: None,
+        })
+    }
+
+    pub fn set_user_active(&self, id: &str, is_active: bool) -> AppResult<UserSummary> {
+        if !is_active {
+            let is_last_admin: bool = self.connection.query_row(
+                "SELECT role = 'admin' AND (SELECT COUNT(*) FROM users WHERE role = 'admin' AND is_active = 1) <= 1 FROM users WHERE id = ?1",
+                [id], |row| row.get(0)
+            ).optional()?.ok_or_else(user_not_found)?;
+            if is_last_admin {
+                return Err(AppError::new(
+                    "USR-002",
+                    "最後の有効な管理者は利用停止にできません。",
+                    "別の管理者を追加してから利用停止にしてください。",
+                ));
+            }
+        }
+        let changed = self.connection.execute(
+            "UPDATE users SET is_active = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, is_active, Utc::now().to_rfc3339()],
+        )?;
+        if changed == 0 {
+            return Err(user_not_found());
+        }
+        self.get_user(id)
+    }
+
+    pub fn reset_user_password(&self, id: &str, password: &str) -> AppResult<UserSummary> {
+        self.ensure_password_allowed(password)?;
+        let password_hash = crate::services::auth::hash_password(password)?;
+        let changed = self.connection.execute(
+            "UPDATE users SET password_hash = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, password_hash, Utc::now().to_rfc3339()],
+        )?;
+        if changed == 0 {
+            return Err(user_not_found());
+        }
+        self.get_user(id)
+    }
+
+    fn get_user(&self, id: &str) -> AppResult<UserSummary> {
+        self.list_users()?
+            .into_iter()
+            .find(|user| user.id == id)
+            .ok_or_else(user_not_found)
+    }
+
+    pub fn export_faq_csv(&self, destination: &Path) -> AppResult<CsvExportResult> {
+        let mut statement = self.connection.prepare(
+            r#"
+            WITH RECURSIVE category_paths(id, management_code, path) AS (
+                SELECT id, management_code, name FROM categories WHERE parent_id IS NULL
+                UNION ALL
+                SELECT child.id, child.management_code, parent.path || ' > ' || child.name
+                  FROM categories child
+                  JOIN category_paths parent ON child.parent_id = parent.id
+            )
+            SELECT a.management_code, category_paths.management_code, category_paths.path, a.title, a.summary,
+                   a.body_plain_text, a.status, a.importance, a.new_badge_until,
+                   a.updated_badge_until, a.is_hidden, creator.display_name,
+                   updater.display_name, a.created_at, a.updated_at
+              FROM articles a
+              JOIN category_paths ON category_paths.id = a.category_id
+              JOIN users creator ON creator.id = a.created_by_user_id
+              JOIN users updater ON updater.id = a.updated_by_user_id
+             WHERE a.deleted_at IS NULL
+             ORDER BY category_paths.path, a.title, a.management_code
+            "#,
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, i64>(7)?,
+                row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<String>>(9)?,
+                row.get::<_, bool>(10)?,
+                row.get::<_, String>(11)?,
+                row.get::<_, String>(12)?,
+                row.get::<_, String>(13)?,
+                row.get::<_, String>(14)?,
+            ))
+        })?;
+
+        let mut writer = csv::WriterBuilder::new()
+            .terminator(csv::Terminator::CRLF)
+            .from_writer(Vec::new());
+        writer
+            .write_record(crate::services::csv_transfer::HEADERS)
+            .map_err(csv_write_error)?;
+        let mut exported_count = 0;
+        for row in rows {
+            let (
+                faq_management_id,
+                category_management_id,
+                category_path,
+                title,
+                summary,
+                body,
+                status,
+                importance,
+                new_badge_until,
+                updated_badge_until,
+                is_hidden,
+                creator,
+                updater,
+                created_at,
+                updated_at,
+            ) = row?;
+            writer
+                .write_record([
+                    crate::services::csv_transfer::FORMAT_VERSION.to_owned(),
+                    faq_management_id,
+                    category_management_id,
+                    safe_excel_cell(&category_path),
+                    safe_excel_cell(&title),
+                    safe_excel_cell(&summary),
+                    safe_excel_cell(&body),
+                    crate::services::csv_transfer::body_hash(&body),
+                    csv_status_label(&status).to_owned(),
+                    importance.to_string(),
+                    new_badge_until.unwrap_or_default(),
+                    updated_badge_until.unwrap_or_default(),
+                    if is_hidden { "TRUE" } else { "FALSE" }.to_owned(),
+                    safe_excel_cell(&creator),
+                    safe_excel_cell(&updater),
+                    created_at,
+                    updated_at,
+                ])
+                .map_err(csv_write_error)?;
+            exported_count += 1;
+        }
+        let bytes = writer.into_inner().map_err(|_| csv_write_error(()))?;
+        let mut output = Vec::with_capacity(bytes.len() + 3);
+        output.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
+        output.extend_from_slice(&bytes);
+        let temporary = destination.with_extension(format!("{}.partial", Uuid::now_v7()));
+        fs::write(&temporary, output).map_err(|_| csv_write_error(()))?;
+        let previous = destination.with_extension(format!("{}.previous.partial", Uuid::now_v7()));
+        let had_previous = destination.exists();
+        if had_previous {
+            fs::rename(destination, &previous).map_err(|_| csv_write_error(()))?;
+        }
+        if fs::rename(&temporary, destination).is_err() {
+            let _ = fs::remove_file(&temporary);
+            if had_previous {
+                let _ = fs::rename(&previous, destination);
+            }
+            return Err(csv_write_error(()));
+        }
+        if had_previous {
+            let _ = fs::remove_file(&previous);
+        }
+        Ok(CsvExportResult {
+            destination_path: destination.display().to_string(),
+            exported_count,
+        })
+    }
+
+    pub fn inspect_faq_csv(&self, source: &Path) -> AppResult<CsvImportPreview> {
+        let (file_sha256, plans) = self.plan_faq_csv(source)?;
+        Ok(csv_preview(source, file_sha256, &plans))
+    }
+
+    pub fn import_faq_csv(
+        &mut self,
+        source: &Path,
+        expected_file_sha256: &str,
+        actor_user_id: &str,
+        safety_backup_path: String,
+    ) -> AppResult<CsvImportResult> {
+        let (file_sha256, plans) = self.plan_faq_csv(source)?;
+        if file_sha256 != expected_file_sha256 {
+            return Err(AppError::new(
+                "CSV-007",
+                "確認後にCSVファイルが変更されています。",
+                "CSVをもう一度プレビューしてから取り込んでください。",
+            ));
+        }
+        if plans.iter().any(|row| row.action == CsvRowAction::Error) {
+            return Err(AppError::new(
+                "CSV-004",
+                "エラーがあるためCSVを取り込めません。",
+                "プレビューに表示された行を修正し、もう一度選択してください。",
+            ));
+        }
+
+        let transaction = self.connection.transaction()?;
+        let now = Utc::now().to_rfc3339();
+        let mut created_count = 0;
+        let mut updated_count = 0;
+        let mut unchanged_count = 0;
+        for row in plans {
+            match row.action {
+                CsvRowAction::Unchanged => {
+                    unchanged_count += 1;
+                    continue;
+                }
+                CsvRowAction::Create => created_count += 1,
+                CsvRowAction::Update => updated_count += 1,
+                CsvRowAction::Error => unreachable!(),
+            }
+            if row.action == CsvRowAction::Create {
+                transaction.execute(
+                    r#"
+                    INSERT INTO articles(
+                        id, category_id, title, normalized_title, summary, body_doc_json,
+                        body_format_version, body_plain_text, status, importance, created_at,
+                        updated_at, new_badge_until, updated_badge_until, is_hidden,
+                        created_by_user_id, updated_by_user_id
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 2, ?7, ?8, ?9, ?10, ?10, ?11, ?12, ?13, ?14, ?14)
+                    "#,
+                    params![row.article_id, row.category_id, row.title, normalize(&row.title), row.summary,
+                        row.body_doc_json, row.body_plain_text, row.status, row.importance, now,
+                        row.new_badge_until, row.updated_badge_until, row.is_hidden, actor_user_id],
+                )?;
+            } else {
+                transaction.execute(
+                    r#"
+                    UPDATE articles
+                       SET category_id = ?2, title = ?3, normalized_title = ?4, summary = ?5,
+                           body_doc_json = ?6, body_format_version = 2, body_plain_text = ?7,
+                           status = ?8, importance = ?9, new_badge_until = ?10,
+                           updated_badge_until = ?11, is_hidden = ?12, updated_at = ?13,
+                           updated_by_user_id = ?14
+                     WHERE id = ?1 AND deleted_at IS NULL
+                    "#,
+                    params![
+                        row.article_id,
+                        row.category_id,
+                        row.title,
+                        normalize(&row.title),
+                        row.summary,
+                        row.body_doc_json,
+                        row.body_plain_text,
+                        row.status,
+                        row.importance,
+                        row.new_badge_until,
+                        row.updated_badge_until,
+                        row.is_hidden,
+                        now,
+                        actor_user_id
+                    ],
+                )?;
+            }
+            transaction.execute(
+                r#"
+                INSERT INTO article_search_documents(article_id, title, summary, body)
+                VALUES (?1, ?2, ?3, ?4)
+                ON CONFLICT(article_id) DO UPDATE SET
+                    title = excluded.title, summary = excluded.summary, body = excluded.body
+                "#,
+                params![
+                    row.article_id,
+                    normalize(&row.title),
+                    normalize(&row.summary),
+                    normalize(&row.body_plain_text)
+                ],
+            )?;
+            transaction.execute(
+                "DELETE FROM article_search_fts WHERE article_id = ?1",
+                [&row.article_id],
+            )?;
+            transaction.execute(
+                "INSERT INTO article_search_fts(article_id, title, summary, body) VALUES (?1, ?2, ?3, ?4)",
+                params![row.article_id, normalize(&row.title), normalize(&row.summary), normalize(&row.body_plain_text)],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(CsvImportResult {
+            source_path: source.display().to_string(),
+            safety_backup_path,
+            created_count,
+            updated_count,
+            unchanged_count,
+        })
+    }
+
+    fn plan_faq_csv(&self, source: &Path) -> AppResult<(String, Vec<CsvImportPlanRow>)> {
+        let bytes =
+            fs::read(source).map_err(|_| csv_read_error("CSVファイルを読み込めませんでした。"))?;
+        if bytes.len() > 50 * 1024 * 1024 {
+            return Err(csv_read_error("CSVファイルが50MBを超えています。"));
+        }
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        let file_sha256 = hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let content = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes);
+        let mut reader = csv::ReaderBuilder::new()
+            .flexible(false)
+            .from_reader(content);
+        let headers = reader
+            .headers()
+            .map_err(|_| csv_read_error("CSVの見出し行を読み込めませんでした。"))?;
+        if headers.iter().ne(crate::services::csv_transfer::HEADERS) {
+            return Err(AppError::new(
+                "CSV-002",
+                "CSVの見出しがKnowledgeApp形式と一致しません。",
+                "KnowledgeAppから書き出したCSVを使用し、列名や列順は変更しないでください。",
+            ));
+        }
+        let category_maps = self.category_csv_maps()?;
+        let mut seen_ids = HashSet::new();
+        let mut plans = Vec::new();
+        for (index, record) in reader.records().enumerate() {
+            let line = index + 2;
+            match record {
+                Ok(record) => plans.push(self.plan_csv_record(
+                    line,
+                    &record,
+                    &category_maps,
+                    &mut seen_ids,
+                )?),
+                Err(_) => plans.push(csv_error_plan(
+                    line,
+                    "CSVの列数または引用符が正しくありません。",
+                )),
+            }
+        }
+        Ok((file_sha256, plans))
+    }
+
+    fn category_csv_maps(&self) -> AppResult<(HashMap<String, String>, HashMap<String, String>)> {
+        let mut statement = self.connection.prepare(
+            r#"WITH RECURSIVE paths(id, management_code, path) AS (
+                SELECT id, management_code, name FROM categories WHERE parent_id IS NULL
+                UNION ALL SELECT c.id, c.management_code, p.path || ' > ' || c.name FROM categories c JOIN paths p ON c.parent_id = p.id
+            ) SELECT id, management_code, path FROM paths"#,
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        let mut by_management_id = HashMap::new();
+        let mut by_path = HashMap::new();
+        for row in rows {
+            let (id, management_id, path) = row?;
+            by_path.insert(path, id.clone());
+            by_management_id.insert(management_id, id);
+        }
+        Ok((by_management_id, by_path))
+    }
+
+    fn plan_csv_record(
+        &self,
+        line: usize,
+        record: &csv::StringRecord,
+        categories: &(HashMap<String, String>, HashMap<String, String>),
+        seen_ids: &mut HashSet<String>,
+    ) -> AppResult<CsvImportPlanRow> {
+        if record.get(0) != Some(crate::services::csv_transfer::FORMAT_VERSION) {
+            return Ok(csv_error_plan(line, "対応していない形式バージョンです。"));
+        }
+        let faq_management_id = record
+            .get(1)
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_uppercase();
+        if !faq_management_id.is_empty() && !seen_ids.insert(faq_management_id.clone()) {
+            return Ok(csv_error_plan(line, "同じFAQ管理IDがCSV内に複数あります。"));
+        }
+        let category_management_id = record
+            .get(2)
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_uppercase();
+        let category_path_cell = unsafed_excel_cell(record.get(3).unwrap_or_default()).trim();
+        let category_id = if !category_path_cell.is_empty() {
+            categories.1.get(category_path_cell).cloned()
+        } else {
+            categories.0.get(&category_management_id).cloned()
+        };
+        let Some(category_id) = category_id else {
+            return Ok(csv_error_plan(
+                line,
+                "分類管理IDまたは分類パスが現在の分類一覧にありません。",
+            ));
+        };
+        let title = unsafed_excel_cell(record.get(4).unwrap_or_default())
+            .trim()
+            .to_owned();
+        let summary = unsafed_excel_cell(record.get(5).unwrap_or_default())
+            .trim()
+            .to_owned();
+        let body_plain_text = crate::services::csv_transfer::normalize_newlines(
+            unsafed_excel_cell(record.get(6).unwrap_or_default()),
+        );
+        if title.is_empty() || title.chars().count() > 200 {
+            return Ok(csv_error_plan(
+                line,
+                "タイトルは1～200文字で入力してください。",
+            ));
+        }
+        if summary.chars().count() > 500 {
+            return Ok(csv_error_plan(
+                line,
+                "概要は500文字以内で入力してください。",
+            ));
+        }
+        let status = match record.get(8).unwrap_or_default().trim() {
+            "下書き" | "draft" => "draft",
+            "公開" | "published" => "published",
+            "廃止" | "archived" => "archived",
+            _ => {
+                return Ok(csv_error_plan(
+                    line,
+                    "状態は「下書き」「公開」「廃止」のいずれかにしてください。",
+                ));
+            }
+        }
+        .to_owned();
+        let importance = match record.get(9).unwrap_or_default().trim().parse::<i64>() {
+            Ok(value @ 1..=3) => value,
+            _ => return Ok(csv_error_plan(line, "重要度は1～3で入力してください。")),
+        };
+        let new_badge_until = match csv_optional_date(record.get(10).unwrap_or_default()) {
+            Ok(value) => value,
+            Err(message) => return Ok(csv_error_plan(line, message)),
+        };
+        let updated_badge_until = match csv_optional_date(record.get(11).unwrap_or_default()) {
+            Ok(value) => value,
+            Err(message) => return Ok(csv_error_plan(line, message)),
+        };
+        let is_hidden = match record
+            .get(12)
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_uppercase()
+            .as_str()
+        {
+            "TRUE" | "1" | "はい" => true,
+            "FALSE" | "0" | "いいえ" | "" => false,
+            _ => {
+                return Ok(csv_error_plan(
+                    line,
+                    "非表示はTRUEまたはFALSEで入力してください。",
+                ));
+            }
+        };
+
+        let existing = if faq_management_id.is_empty() {
+            None
+        } else {
+            self.existing_csv_article(&faq_management_id)?
+        };
+        if !faq_management_id.is_empty() && existing.is_none() {
+            return Ok(csv_error_plan(
+                line,
+                "FAQ管理IDに一致する登録中のFAQがありません。",
+            ));
+        }
+        let exported_body_hash = record.get(7).unwrap_or_default().trim();
+        let body_will_be_replaced = existing.is_none()
+            || crate::services::csv_transfer::body_hash(&body_plain_text) != exported_body_hash;
+        if status == "published" && body_will_be_replaced && body_plain_text.trim().is_empty() {
+            return Ok(csv_error_plan(
+                line,
+                "公開FAQの回答本文は空欄にできません。",
+            ));
+        }
+        if let Some(existing) = &existing {
+            if status == "published"
+                && !body_will_be_replaced
+                && existing.body_plain_text.trim().is_empty()
+                && !existing.has_attachments
+            {
+                return Ok(csv_error_plan(
+                    line,
+                    "公開FAQの回答本文は空欄にできません。",
+                ));
+            }
+            if existing.is_merge_target && (status != "published" || is_hidden) {
+                return Ok(csv_error_plan(
+                    line,
+                    "統合先FAQは公開かつ非表示OFFを維持してください。",
+                ));
+            }
+        }
+        let (article_id, body_doc_json, effective_body, action, stale) = match existing {
+            None => (
+                Uuid::now_v7().to_string(),
+                serde_json::to_string(&crate::services::csv_transfer::plain_text_to_document(
+                    &body_plain_text,
+                ))
+                .map_err(|_| csv_read_error("回答本文を変換できませんでした。"))?,
+                body_plain_text.clone(),
+                CsvRowAction::Create,
+                false,
+            ),
+            Some(existing) => {
+                let doc = if body_will_be_replaced {
+                    serde_json::to_string(&crate::services::csv_transfer::plain_text_to_document(
+                        &body_plain_text,
+                    ))
+                    .map_err(|_| csv_read_error("回答本文を変換できませんでした。"))?
+                } else {
+                    existing.body_doc_json.clone()
+                };
+                let effective_body = if body_will_be_replaced {
+                    body_plain_text.clone()
+                } else {
+                    existing.body_plain_text.clone()
+                };
+                let changed = category_id != existing.category_id
+                    || title != existing.title
+                    || summary != existing.summary
+                    || effective_body != existing.body_plain_text
+                    || status != existing.status
+                    || importance != existing.importance
+                    || new_badge_until != existing.new_badge_until
+                    || updated_badge_until != existing.updated_badge_until
+                    || is_hidden != existing.is_hidden;
+                let stale =
+                    changed && record.get(16).unwrap_or_default().trim() != existing.updated_at;
+                (
+                    existing.article_id,
+                    doc,
+                    effective_body,
+                    if changed {
+                        CsvRowAction::Update
+                    } else {
+                        CsvRowAction::Unchanged
+                    },
+                    stale,
+                )
+            }
+        };
+        let mut messages = Vec::new();
+        if body_will_be_replaced {
+            messages.push(
+                "回答本文をプレーンテキスト段落へ置換します（表・画像・書式は本文から外れます）。"
+                    .to_owned(),
+            );
+        }
+        if stale {
+            messages.push(
+                "書き出し後に更新されていますが、指定どおりCSVの内容で上書きします。".to_owned(),
+            );
+        }
+        Ok(CsvImportPlanRow {
+            line,
+            action,
+            faq_management_id: (!faq_management_id.is_empty()).then_some(faq_management_id),
+            article_id,
+            category_id,
+            title,
+            summary,
+            body_plain_text: effective_body,
+            body_doc_json,
+            body_will_be_replaced,
+            status,
+            importance,
+            new_badge_until,
+            updated_badge_until,
+            is_hidden,
+            stale_update_will_overwrite: stale,
+            messages,
+        })
+    }
+
+    fn existing_csv_article(&self, management_id: &str) -> AppResult<Option<ExistingCsvArticle>> {
+        self.connection.query_row(
+            r#"SELECT id, category_id, title, summary, body_plain_text, body_doc_json, status, importance,
+                      new_badge_until, updated_badge_until, is_hidden, updated_at,
+                      EXISTS(SELECT 1 FROM article_attachments WHERE article_id = articles.id),
+                      EXISTS(SELECT 1 FROM article_merge_relations WHERE target_article_id = articles.id)
+                 FROM articles WHERE management_code = ?1 AND deleted_at IS NULL"#,
+            [management_id],
+            |row| Ok(ExistingCsvArticle {
+                article_id: row.get(0)?, category_id: row.get(1)?, title: row.get(2)?, summary: row.get(3)?,
+                body_plain_text: row.get(4)?, body_doc_json: row.get(5)?, status: row.get(6)?,
+                importance: row.get(7)?, new_badge_until: row.get(8)?, updated_badge_until: row.get(9)?,
+                is_hidden: row.get(10)?, updated_at: row.get(11)?, has_attachments: row.get(12)?,
+                is_merge_target: row.get(13)?,
+            }),
+        ).optional().map_err(AppError::from)
     }
 
     pub fn backup_counts(&self) -> AppResult<BackupCounts> {
@@ -296,6 +1123,65 @@ impl Database {
             "#,
             params![APPEARANCE_SETTINGS_KEY, value_json, Utc::now().to_rfc3339()],
         )?;
+        Ok(())
+    }
+
+    pub fn get_password_policy(&self) -> AppResult<PasswordPolicySettings> {
+        let stored: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT value_json FROM app_settings WHERE key = ?1",
+                [PASSWORD_POLICY_SETTINGS_KEY],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        let Some(stored) = stored else {
+            return Ok(PasswordPolicySettings::default());
+        };
+
+        serde_json::from_str(&stored).map_err(|_| {
+            AppError::new(
+                "SET-003",
+                "パスワード設定を読み込めませんでした。",
+                "設定画面で空パスワードの許可設定を選び直して保存してください。",
+            )
+        })
+    }
+
+    pub fn save_password_policy(&self, settings: &PasswordPolicySettings) -> AppResult<()> {
+        let value_json = serde_json::to_string(settings).map_err(|_| {
+            AppError::new(
+                "SET-004",
+                "パスワード設定を保存できませんでした。",
+                "設定内容を確認して、もう一度保存してください。",
+            )
+        })?;
+        self.connection.execute(
+            r#"
+            INSERT INTO app_settings(key, value_json, updated_at)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(key) DO UPDATE SET
+                value_json = excluded.value_json,
+                updated_at = excluded.updated_at
+            "#,
+            params![
+                PASSWORD_POLICY_SETTINGS_KEY,
+                value_json,
+                Utc::now().to_rfc3339()
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn ensure_password_allowed(&self, password: &str) -> AppResult<()> {
+        if password.is_empty() && !self.get_password_policy()?.allow_empty_passwords {
+            return Err(AppError::new(
+                "USR-004",
+                "空欄のパスワードは現在許可されていません。",
+                "1文字以上のパスワードを入力してください。既存利用者のパスワードは変更されません。",
+            ));
+        }
         Ok(())
     }
 
@@ -540,7 +1426,16 @@ impl Database {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn save_article(&mut self, article: ArticleRecord<'_>) -> AppResult<Article> {
+        self.save_article_as(article, INITIAL_ADMIN_USER_ID)
+    }
+
+    pub fn save_article_as(
+        &mut self,
+        article: ArticleRecord<'_>,
+        actor_user_id: &str,
+    ) -> AppResult<Article> {
         let transaction = self.connection.transaction()?;
         let category_exists: bool = transaction.query_row(
             "SELECT EXISTS(SELECT 1 FROM categories WHERE id = ?1)",
@@ -553,6 +1448,17 @@ impl Database {
                 "選択した分類が見つかりません。",
                 "分類を選び直して、もう一度保存してください。",
             ));
+        }
+
+        if !article.is_new && (article.status != "published" || article.is_hidden) {
+            let has_merge_sources: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM article_merge_relations WHERE target_article_id = ?1)",
+                [article.id],
+                |row| row.get(0),
+            )?;
+            if has_merge_sources {
+                return Err(merge_target_visibility_error());
+            }
         }
 
         let id = article.id.to_owned();
@@ -572,7 +1478,7 @@ impl Database {
                    SET category_id = ?2, title = ?3, normalized_title = ?4, summary = ?5,
                        body_doc_json = ?6, body_format_version = 2, body_plain_text = ?7, status = ?8,
                        importance = ?9, new_badge_until = ?10, updated_badge_until = ?11,
-                       is_hidden = ?12, updated_at = ?13
+                       is_hidden = ?12, updated_at = ?13, updated_by_user_id = ?14
                  WHERE id = ?1 AND deleted_at IS NULL
                 "#,
                 params![
@@ -588,7 +1494,8 @@ impl Database {
                     article.new_badge_until,
                     article.updated_badge_until,
                     article.is_hidden,
-                    now
+                    now,
+                    actor_user_id
                 ],
             )?;
             if updated == 0 {
@@ -600,8 +1507,9 @@ impl Database {
                 INSERT INTO articles(
                     id, category_id, title, normalized_title, summary, body_doc_json,
                     body_format_version, body_plain_text, status, importance, created_at, updated_at
-                    , new_badge_until, updated_badge_until, is_hidden
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 2, ?7, ?8, ?9, ?10, ?10, ?11, ?12, ?13)
+                    , new_badge_until, updated_badge_until, is_hidden,
+                    created_by_user_id, updated_by_user_id
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 2, ?7, ?8, ?9, ?10, ?10, ?11, ?12, ?13, ?14, ?14)
                 "#,
                 params![
                     id,
@@ -616,7 +1524,8 @@ impl Database {
                     now,
                     article.new_badge_until,
                     article.updated_badge_until,
-                    article.is_hidden
+                    article.is_hidden,
+                    actor_user_id
                 ],
             )?;
         }
@@ -793,6 +1702,253 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
     }
 
+    pub fn get_codex_merge_publication_context(
+        &self,
+        target_article_id: &str,
+    ) -> AppResult<Option<CodexMergePublicationContext>> {
+        let payload: Option<String> = self
+            .connection
+            .query_row(
+                r#"
+                SELECT payload_json
+                  FROM codex_proposal_history
+                 WHERE accepted_article_id = ?1
+                   AND proposal_kind = 'merge'
+                   AND status = 'accepted'
+                 ORDER BY history_id DESC
+                 LIMIT 1
+                "#,
+                [target_article_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(payload) = payload else {
+            return Ok(None);
+        };
+        let proposal = parse_stored_proposal(payload)?;
+        let mut source_articles = Vec::with_capacity(proposal.source_articles.len());
+        let mut can_mark_merged = !proposal.source_articles.is_empty();
+        let mut all_sources_merged = !proposal.source_articles.is_empty();
+        for source in proposal.source_articles {
+            let current: Option<CodexMergeSourceRow> = self
+                .connection
+                .query_row(
+                    r#"
+                    SELECT article.title, article.status, article.updated_at, article.deleted_at,
+                           merge_relation.target_article_id
+                      FROM articles article
+                      LEFT JOIN article_merge_relations merge_relation
+                        ON merge_relation.source_article_id = article.id
+                     WHERE article.id = ?1
+                    "#,
+                    [&source.article_id],
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            let (title, status, current_updated_at, deleted_at, merge_target_id) = match current {
+                Some(current) => (
+                    current.0,
+                    Some(current.1),
+                    Some(current.2),
+                    current.3,
+                    current.4,
+                ),
+                None => (source.article_id.clone(), None, None, None, None),
+            };
+            let is_current = current_updated_at.as_deref()
+                == Some(source.source_updated_at.as_str())
+                && deleted_at.is_none();
+            let is_merged = merge_target_id.as_deref() == Some(target_article_id);
+            let has_conflicting_merge = merge_target_id.is_some() && !is_merged;
+            can_mark_merged &= is_merged || (is_current && !has_conflicting_merge);
+            all_sources_merged &= is_merged;
+            source_articles.push(CodexMergeSourcePreview {
+                article_id: source.article_id,
+                title,
+                status,
+                source_updated_at: source.source_updated_at,
+                current_updated_at,
+                deleted_at,
+                is_current,
+                is_merged,
+            });
+        }
+        Ok(Some(CodexMergePublicationContext {
+            target_article_id: target_article_id.to_owned(),
+            source_articles,
+            can_mark_merged: can_mark_merged && !all_sources_merged,
+            all_sources_merged,
+        }))
+    }
+
+    pub fn requires_new_badge_for_merge_publication(
+        &self,
+        target_article_id: &str,
+    ) -> AppResult<bool> {
+        self.connection
+            .query_row(
+                r#"
+                SELECT EXISTS(
+                    SELECT 1
+                      FROM articles article
+                     WHERE article.id = ?1
+                       AND article.deleted_at IS NULL
+                       AND article.status <> 'published'
+                       AND EXISTS (
+                           SELECT 1
+                             FROM codex_proposal_history history
+                            WHERE history.accepted_article_id = article.id
+                              AND history.proposal_kind = 'merge'
+                              AND history.status = 'accepted'
+                       )
+                )
+                "#,
+                [target_article_id],
+                |row| row.get(0),
+            )
+            .map_err(AppError::from)
+    }
+
+    pub fn mark_codex_merge_sources(
+        &mut self,
+        target_article_id: &str,
+    ) -> AppResult<MarkCodexMergeSourcesResult> {
+        let transaction = self.connection.transaction()?;
+        let target: Option<(String, Option<String>, Option<String>, bool)> = transaction
+            .query_row(
+                "SELECT status, new_badge_until, deleted_at, is_hidden FROM articles WHERE id = ?1",
+                [target_article_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?;
+        let Some((target_status, new_badge_until, target_deleted_at, target_is_hidden)) = target
+        else {
+            return Err(article_not_found());
+        };
+        if target_deleted_at.is_some() || target_status != "published" || target_is_hidden {
+            return Err(AppError::new(
+                "CDX-016",
+                "統合元FAQを統合済みにする前に、統合FAQを公開して表示してください。",
+                "統合FAQの内容を確認し、公開かつ非表示OFFで保存してからもう一度お試しください。",
+            ));
+        }
+        if new_badge_until.is_none() {
+            return Err(AppError::new(
+                "CDX-016",
+                "統合FAQに新着フラグの表示終了日がありません。",
+                "統合FAQを編集し、新着フラグと表示終了日を設定してください。",
+            ));
+        }
+        let payload: Option<String> = transaction
+            .query_row(
+                r#"
+                SELECT payload_json
+                  FROM codex_proposal_history
+                 WHERE accepted_article_id = ?1
+                   AND proposal_kind = 'merge'
+                   AND status = 'accepted'
+                 ORDER BY history_id DESC
+                 LIMIT 1
+                "#,
+                [target_article_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let proposal = parse_stored_proposal(payload.ok_or_else(|| {
+            AppError::new(
+                "CDX-016",
+                "このFAQの統合元情報が見つかりません。",
+                "Codex提案履歴を確認し、元FAQはFAQ管理画面から整理してください。",
+            )
+        })?)?;
+        let now = Utc::now().to_rfc3339();
+        let mut marked_count = 0;
+        for source in &proposal.source_articles {
+            let current: Option<(String, Option<String>, Option<String>)> = transaction
+                .query_row(
+                    r#"
+                    SELECT article.updated_at, article.deleted_at,
+                           merge_relation.target_article_id
+                      FROM articles article
+                      LEFT JOIN article_merge_relations merge_relation
+                        ON merge_relation.source_article_id = article.id
+                     WHERE article.id = ?1
+                    "#,
+                    [&source.article_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()?;
+            let Some((updated_at, deleted_at, merge_target_id)) = current else {
+                return Err(AppError::new(
+                    "CDX-012",
+                    "統合元FAQが見つかりません。",
+                    "元FAQは変更せず、FAQ管理画面で現在の状態を確認してください。",
+                ));
+            };
+            if merge_target_id.as_deref() == Some(target_article_id) {
+                continue;
+            }
+            if merge_target_id.is_some() {
+                return Err(AppError::new(
+                    "CDX-017",
+                    "統合元FAQの一部が別のFAQへ統合済みです。",
+                    "FAQ管理画面で統合先を確認し、対象を整理してください。",
+                ));
+            }
+            if deleted_at.is_some() || updated_at != source.source_updated_at {
+                return Err(AppError::new(
+                    "CDX-012",
+                    "統合案の承認後に、統合元FAQが変更または削除されています。",
+                    "現在の内容を誤って非表示にしないため、自動整理を中止しました。FAQ管理画面で確認してください。",
+                ));
+            }
+            transaction.execute(
+                r#"
+                INSERT INTO article_merge_relations(
+                    source_article_id, target_article_id, source_updated_at, merged_at
+                ) VALUES (?1, ?2, ?3, ?4)
+                "#,
+                params![
+                    source.article_id,
+                    target_article_id,
+                    source.source_updated_at,
+                    now,
+                ],
+            )?;
+            marked_count += 1;
+        }
+        transaction.commit()?;
+        Ok(MarkCodexMergeSourcesResult {
+            target_article_id: target_article_id.to_owned(),
+            marked_count,
+        })
+    }
+
+    pub fn clear_article_merge(&mut self, source_article_id: &str) -> AppResult<Article> {
+        let transaction = self.connection.transaction()?;
+        let changed = transaction.execute(
+            "DELETE FROM article_merge_relations WHERE source_article_id = ?1",
+            [source_article_id],
+        )?;
+        if changed == 0 {
+            return Err(AppError::new(
+                "CDX-018",
+                "このFAQは統合済みではありません。",
+                "FAQの詳細を更新して、現在の状態を確認してください。",
+            ));
+        }
+        transaction.commit()?;
+        self.get_article(source_article_id)
+    }
+
     pub fn reject_codex_proposal(&mut self, request_id: &str) -> AppResult<()> {
         let transaction = self.connection.transaction()?;
         let changed = transaction.execute(
@@ -849,9 +2005,18 @@ impl Database {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn accept_codex_proposal(
         &mut self,
         record: CodexProposalArticleRecord<'_>,
+    ) -> AppResult<(Article, Option<Category>)> {
+        self.accept_codex_proposal_as(record, INITIAL_ADMIN_USER_ID)
+    }
+
+    pub fn accept_codex_proposal_as(
+        &mut self,
+        record: CodexProposalArticleRecord<'_>,
+        actor_user_id: &str,
     ) -> AppResult<(Article, Option<Category>)> {
         let transaction = self.connection.transaction()?;
         let already_accepted: bool = transaction.query_row(
@@ -937,8 +2102,9 @@ impl Database {
             INSERT INTO articles(
                 id, category_id, title, normalized_title, summary, body_doc_json,
                 body_format_version, body_plain_text, status, importance, created_at, updated_at,
-                new_badge_until, updated_badge_until, is_hidden
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 2, ?7, 'draft', ?8, ?9, ?9, NULL, NULL, 0)
+                new_badge_until, updated_badge_until, is_hidden,
+                created_by_user_id, updated_by_user_id
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 2, ?7, 'draft', ?8, ?9, ?9, NULL, NULL, 0, ?10, ?10)
             "#,
             params![
                 record.article_id,
@@ -950,6 +2116,7 @@ impl Database {
                 record.body_plain_text,
                 record.importance,
                 now,
+                actor_user_id,
             ],
         )?;
         transaction.execute(
@@ -983,9 +2150,18 @@ impl Database {
         Ok((self.get_article(record.article_id)?, created_category))
     }
 
+    #[cfg(test)]
     pub fn accept_codex_revision(
         &mut self,
         record: CodexProposalRevisionRecord<'_>,
+    ) -> AppResult<Article> {
+        self.accept_codex_revision_as(record, INITIAL_ADMIN_USER_ID)
+    }
+
+    pub fn accept_codex_revision_as(
+        &mut self,
+        record: CodexProposalRevisionRecord<'_>,
+        actor_user_id: &str,
     ) -> AppResult<Article> {
         let transaction = self.connection.transaction()?;
         let already_accepted: bool = transaction.query_row(
@@ -1016,7 +2192,7 @@ impl Database {
             UPDATE articles
                SET title = ?2, normalized_title = ?3, summary = ?4,
                    body_doc_json = ?5, body_format_version = 2, body_plain_text = ?6, importance = ?7,
-                   updated_at = ?8
+                    updated_at = ?8, updated_by_user_id = ?9
              WHERE id = ?1 AND deleted_at IS NULL
             "#,
             params![
@@ -1028,6 +2204,7 @@ impl Database {
                 record.body_plain_text,
                 record.importance,
                 now,
+                actor_user_id,
             ],
         )?;
         if updated == 0 {
@@ -1081,9 +2258,18 @@ impl Database {
                 r#"
                 SELECT a.id, a.category_id, c.name, a.title, a.summary, a.body_doc_json,
                        a.body_plain_text, a.status, a.importance, a.created_at, a.updated_at,
-                       a.deleted_at, a.new_badge_until, a.updated_badge_until, a.is_hidden
+                       a.deleted_at, a.new_badge_until, a.updated_badge_until, a.is_hidden,
+                       merge_relation.target_article_id, merge_target.title, merge_relation.merged_at,
+                       a.created_by_user_id, creator.display_name,
+                       a.updated_by_user_id, updater.display_name
                   FROM articles a
                   JOIN categories c ON c.id = a.category_id
+                  LEFT JOIN article_merge_relations merge_relation
+                    ON merge_relation.source_article_id = a.id
+                   LEFT JOIN articles merge_target
+                     ON merge_target.id = merge_relation.target_article_id
+                  JOIN users creator ON creator.id = a.created_by_user_id
+                  JOIN users updater ON updater.id = a.updated_by_user_id
                  WHERE a.id = ?1
                 "#,
                 [id],
@@ -1119,10 +2305,45 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
     }
 
-    pub fn search_articles(&self, input: &SearchArticlesInput) -> AppResult<Vec<ArticleListItem>> {
+    pub fn search_articles(&self, input: &SearchArticlesInput) -> AppResult<SearchArticlePage> {
+        const PAGE_SIZE: i64 = 50;
         let normalized_query = normalize(input.query.trim());
         let like_query = format!("%{}%", escape_like(&normalized_query));
         let category_id = input.category_id.as_deref();
+        let total: i64 = self.connection.query_row(
+            r#"
+            WITH RECURSIVE selected_categories(id) AS (
+                SELECT id FROM categories WHERE id = ?2
+                UNION ALL
+                SELECT c.id FROM categories c
+                JOIN selected_categories parent ON c.parent_id = parent.id
+            )
+            SELECT COUNT(*)
+              FROM articles a
+              JOIN article_search_documents search_doc ON search_doc.article_id = a.id
+             WHERE a.deleted_at IS NULL
+               AND a.is_hidden = 0
+               AND NOT EXISTS (
+                   SELECT 1 FROM article_merge_relations merge_relation
+                    WHERE merge_relation.source_article_id = a.id
+               )
+               AND (?3 = 1 OR a.status = 'published')
+               AND (?2 IS NULL OR a.category_id IN (SELECT id FROM selected_categories))
+               AND (?1 = '' OR search_doc.title LIKE ?4 ESCAPE '\'
+                    OR search_doc.summary LIKE ?4 ESCAPE '\'
+                    OR search_doc.body LIKE ?4 ESCAPE '\')
+            "#,
+            params![
+                &normalized_query,
+                category_id,
+                input.include_drafts,
+                &like_query
+            ],
+            |row| row.get(0),
+        )?;
+        let total_pages = ((total + PAGE_SIZE - 1) / PAGE_SIZE).max(1);
+        let page = input.page.max(1).min(total_pages);
+        let offset = (page - 1) * PAGE_SIZE;
         let mut statement = self.connection.prepare(
             r#"
             WITH RECURSIVE selected_categories(id) AS (
@@ -1139,21 +2360,32 @@ impl Database {
               JOIN article_search_documents search_doc ON search_doc.article_id = a.id
              WHERE a.deleted_at IS NULL
                AND a.is_hidden = 0
+               AND NOT EXISTS (
+                   SELECT 1 FROM article_merge_relations merge_relation
+                    WHERE merge_relation.source_article_id = a.id
+               )
                AND (?3 = 1 OR a.status = 'published')
                AND (?2 IS NULL OR a.category_id IN (SELECT id FROM selected_categories))
                AND (?1 = '' OR search_doc.title LIKE ?4 ESCAPE '\'
                     OR search_doc.summary LIKE ?4 ESCAPE '\'
                     OR search_doc.body LIKE ?4 ESCAPE '\')
-             ORDER BY a.importance DESC, a.updated_at DESC
-             LIMIT 500
+             ORDER BY CASE WHEN ?7 = 'updatedDesc' THEN a.updated_at END DESC,
+                      CASE WHEN ?7 = 'updatedAsc' THEN a.updated_at END ASC,
+                      CASE WHEN ?7 = 'importanceDesc' THEN a.importance END DESC,
+                      CASE WHEN ?7 = 'importanceAsc' THEN a.importance END ASC,
+                      a.updated_at DESC, a.id DESC
+             LIMIT ?5 OFFSET ?6
             "#,
         )?;
         let rows = statement.query_map(
             params![
-                normalized_query,
+                &normalized_query,
                 category_id,
                 input.include_drafts,
-                like_query
+                &like_query,
+                PAGE_SIZE,
+                offset,
+                input.sort.as_str()
             ],
             |row| {
                 Ok(ArticleListItem {
@@ -1171,7 +2403,12 @@ impl Database {
                 })
             },
         )?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
+        Ok(SearchArticlePage {
+            items: rows.collect::<Result<Vec<_>, _>>()?,
+            total,
+            page,
+            page_size: PAGE_SIZE,
+        })
     }
 
     pub fn list_articles_for_management(
@@ -1195,10 +2432,20 @@ impl Database {
             ), filtered AS (
                 SELECT a.id, a.category_id, c.name AS category_name, a.title, a.summary,
                        a.status, a.importance, a.new_badge_until, a.updated_badge_until,
-                       a.is_hidden, a.updated_at, a.deleted_at
+                       a.is_hidden, a.updated_at, a.deleted_at,
+                       merge_relation.target_article_id, merge_target.title AS merge_target_title,
+                       merge_relation.merged_at,
+                       creator.display_name AS created_by_display_name,
+                       updater.display_name AS updated_by_display_name
                   FROM articles a
                   JOIN categories c ON c.id = a.category_id
                   JOIN article_search_documents search_doc ON search_doc.article_id = a.id
+                  LEFT JOIN article_merge_relations merge_relation
+                    ON merge_relation.source_article_id = a.id
+                  LEFT JOIN articles merge_target
+                    ON merge_target.id = merge_relation.target_article_id
+                  JOIN users creator ON creator.id = a.created_by_user_id
+                  JOIN users updater ON updater.id = a.updated_by_user_id
                  WHERE ((?4 = 1 AND a.deleted_at IS NOT NULL) OR (?4 = 0 AND a.deleted_at IS NULL))
                    AND (?2 IS NULL OR a.category_id IN (SELECT id FROM selected_categories))
                    AND (?3 IS NULL OR a.status = ?3)
@@ -1208,7 +2455,9 @@ impl Database {
             )
             SELECT id, category_id, category_name, title, summary, status, importance,
                    new_badge_until, updated_badge_until, is_hidden, updated_at, deleted_at,
-                   COUNT(*) OVER()
+                    target_article_id, merge_target_title, merged_at,
+                    created_by_display_name, updated_by_display_name,
+                    COUNT(*) OVER()
               FROM filtered
              ORDER BY updated_at DESC
              LIMIT ?6 OFFSET ?7
@@ -1238,9 +2487,12 @@ impl Database {
                         updated_badge_until: row.get(8)?,
                         is_hidden: row.get(9)?,
                         updated_at: row.get(10)?,
+                        created_by_display_name: row.get(15)?,
+                        updated_by_display_name: row.get(16)?,
                         deleted_at: row.get(11)?,
+                        merge_info: article_merge_info_from_columns(row, 12, 13, 14)?,
                     },
-                    row.get::<_, i64>(12)?,
+                    row.get::<_, i64>(17)?,
                 ))
             },
         )?;
@@ -1254,12 +2506,25 @@ impl Database {
         })
     }
 
+    #[cfg(test)]
     pub fn delete_article(&mut self, id: &str) -> AppResult<Article> {
+        self.delete_article_as(id, INITIAL_ADMIN_USER_ID)
+    }
+
+    pub fn delete_article_as(&mut self, id: &str, actor_user_id: &str) -> AppResult<Article> {
         let transaction = self.connection.transaction()?;
+        let has_merge_sources: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM article_merge_relations WHERE target_article_id = ?1)",
+            [id],
+            |row| row.get(0),
+        )?;
+        if has_merge_sources {
+            return Err(merge_target_visibility_error());
+        }
         let now = Utc::now().to_rfc3339();
         let updated = transaction.execute(
-            "UPDATE articles SET deleted_at = ?2, updated_at = ?2 WHERE id = ?1 AND deleted_at IS NULL",
-            params![id, now],
+            "UPDATE articles SET deleted_at = ?2, updated_at = ?2, updated_by_user_id = ?3 WHERE id = ?1 AND deleted_at IS NULL",
+            params![id, now, actor_user_id],
         )?;
         if updated == 0 {
             return Err(article_not_found());
@@ -1269,12 +2534,17 @@ impl Database {
         self.get_article(id)
     }
 
+    #[cfg(test)]
     pub fn restore_article(&mut self, id: &str) -> AppResult<Article> {
+        self.restore_article_as(id, INITIAL_ADMIN_USER_ID)
+    }
+
+    pub fn restore_article_as(&mut self, id: &str, actor_user_id: &str) -> AppResult<Article> {
         let transaction = self.connection.transaction()?;
         let now = Utc::now().to_rfc3339();
         let updated = transaction.execute(
-            "UPDATE articles SET deleted_at = NULL, updated_at = ?2 WHERE id = ?1 AND deleted_at IS NOT NULL",
-            params![id, now],
+            "UPDATE articles SET deleted_at = NULL, updated_at = ?2, updated_by_user_id = ?3 WHERE id = ?1 AND deleted_at IS NOT NULL",
+            params![id, now, actor_user_id],
         )?;
         if updated == 0 {
             return Err(AppError::new(
@@ -1305,6 +2575,147 @@ impl Database {
 fn parse_stored_proposal(payload: String) -> AppResult<CodexFaqProposal> {
     serde_json::from_str(&payload)
         .map_err(|_| AppError::database("保存済みのCodex提案履歴を読み取れませんでした。"))
+}
+
+fn csv_status_label(status: &str) -> &'static str {
+    match status {
+        "draft" => "下書き",
+        "published" => "公開",
+        "archived" => "廃止",
+        _ => "下書き",
+    }
+}
+
+fn safe_excel_cell(value: &str) -> String {
+    if value.starts_with(['=', '+', '-', '@']) {
+        format!("'{value}")
+    } else {
+        value.to_owned()
+    }
+}
+
+fn unsafed_excel_cell(value: &str) -> &str {
+    match value.strip_prefix('\'') {
+        Some(rest) if rest.starts_with(['=', '+', '-', '@']) => rest,
+        _ => value,
+    }
+}
+
+fn csv_optional_date(value: &str) -> Result<Option<String>, &'static str> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .map(|_| Some(value.to_owned()))
+        .map_err(|_| "日付はYYYY-MM-DD形式で入力してください。")
+}
+
+fn csv_error_plan(line: usize, message: &str) -> CsvImportPlanRow {
+    CsvImportPlanRow {
+        line,
+        action: CsvRowAction::Error,
+        faq_management_id: None,
+        article_id: String::new(),
+        category_id: String::new(),
+        title: String::new(),
+        summary: String::new(),
+        body_plain_text: String::new(),
+        body_doc_json: String::new(),
+        body_will_be_replaced: false,
+        status: "draft".to_owned(),
+        importance: 1,
+        new_badge_until: None,
+        updated_badge_until: None,
+        is_hidden: false,
+        stale_update_will_overwrite: false,
+        messages: vec![message.to_owned()],
+    }
+}
+
+fn csv_preview(source: &Path, file_sha256: String, plans: &[CsvImportPlanRow]) -> CsvImportPreview {
+    CsvImportPreview {
+        source_path: source.display().to_string(),
+        file_sha256,
+        total_rows: plans.len(),
+        create_count: plans
+            .iter()
+            .filter(|row| row.action == CsvRowAction::Create)
+            .count(),
+        update_count: plans
+            .iter()
+            .filter(|row| row.action == CsvRowAction::Update)
+            .count(),
+        unchanged_count: plans
+            .iter()
+            .filter(|row| row.action == CsvRowAction::Unchanged)
+            .count(),
+        body_replacement_count: plans.iter().filter(|row| row.body_will_be_replaced).count(),
+        stale_overwrite_count: plans
+            .iter()
+            .filter(|row| row.stale_update_will_overwrite)
+            .count(),
+        error_count: plans
+            .iter()
+            .filter(|row| row.action == CsvRowAction::Error)
+            .count(),
+        rows: plans
+            .iter()
+            .map(|row| CsvImportPreviewRow {
+                line: row.line,
+                action: row.action.as_str().to_owned(),
+                faq_management_id: row.faq_management_id.clone(),
+                title: row.title.clone(),
+                body_will_be_replaced: row.body_will_be_replaced,
+                stale_update_will_overwrite: row.stale_update_will_overwrite,
+                messages: row.messages.clone(),
+            })
+            .collect(),
+    }
+}
+
+fn csv_write_error<T>(_: T) -> AppError {
+    AppError::new(
+        "CSV-001",
+        "CSVファイルを書き出せませんでした。",
+        "保存先の空き容量と書込み権限を確認し、Excelで開いている場合は閉じてください。",
+    )
+}
+
+fn csv_read_error(message: &str) -> AppError {
+    AppError::new(
+        "CSV-003",
+        message,
+        "KnowledgeAppから書き出したUTF-8のCSVを選択してください。",
+    )
+}
+
+fn parse_user_role(value: &str) -> AppResult<UserRole> {
+    match value {
+        "admin" => Ok(UserRole::Admin),
+        "user" => Ok(UserRole::User),
+        _ => Err(AppError::database("利用者の権限データが正しくありません。")),
+    }
+}
+
+fn validate_user_text<'a>(value: &'a str, label: &str) -> AppResult<&'a str> {
+    let value = value.trim();
+    if value.is_empty() || value.chars().count() > 100 {
+        return Err(AppError::new(
+            "USR-001",
+            format!("{label}は1～100文字で入力してください。"),
+            "入力内容を確認してください。",
+        ));
+    }
+    Ok(value)
+}
+
+fn user_not_found() -> AppError {
+    AppError::new(
+        "USR-001",
+        "指定した利用者が見つかりません。",
+        "利用者一覧を更新して、もう一度選択してください。",
+    )
 }
 
 fn ensure_pending_codex_history(transaction: &Transaction<'_>, request_id: &str) -> AppResult<()> {
@@ -1406,8 +2817,30 @@ fn article_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Article> {
         new_badge_until: row.get(12)?,
         updated_badge_until: row.get(13)?,
         is_hidden: row.get(14)?,
+        merge_info: article_merge_info_from_columns(row, 15, 16, 17)?,
+        created_by_user_id: row.get(18)?,
+        created_by_display_name: row.get(19)?,
+        updated_by_user_id: row.get(20)?,
+        updated_by_display_name: row.get(21)?,
         attachments: Vec::new(),
     })
+}
+
+fn article_merge_info_from_columns(
+    row: &rusqlite::Row<'_>,
+    target_id_index: usize,
+    target_title_index: usize,
+    merged_at_index: usize,
+) -> rusqlite::Result<Option<ArticleMergeInfo>> {
+    let target_article_id: Option<String> = row.get(target_id_index)?;
+    let Some(target_article_id) = target_article_id else {
+        return Ok(None);
+    };
+    Ok(Some(ArticleMergeInfo {
+        target_article_id,
+        target_article_title: row.get(target_title_index)?,
+        merged_at: row.get(merged_at_index)?,
+    }))
 }
 
 fn insert_category(
@@ -1498,6 +2931,14 @@ fn article_not_found() -> AppError {
     )
 }
 
+fn merge_target_visibility_error() -> AppError {
+    AppError::new(
+        "ART-009",
+        "統合先になっているFAQは、非表示・下書き・廃止・削除にできません。",
+        "FAQ管理画面で元FAQの統合済み設定を解除してから、もう一度お試しください。",
+    )
+}
+
 fn validate_category_name(name: &str) -> AppResult<&str> {
     let name = name.trim();
     if name.is_empty() || name.chars().count() > 100 {
@@ -1541,6 +2982,7 @@ fn category_cycle_error() -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::SearchSort;
     use serde_json::json;
 
     fn temporary_database() -> (tempfile::TempDir, Database) {
@@ -1579,7 +3021,7 @@ mod tests {
         drop(connection);
 
         let database = Database::open(&path).unwrap();
-        assert_eq!(database.schema_version().unwrap(), 4);
+        assert_eq!(database.schema_version().unwrap(), 7);
         let columns: i64 = database
             .connection
             .query_row(
@@ -1607,6 +3049,24 @@ mod tests {
             )
             .unwrap();
         assert_eq!(proposal_history_table, 1);
+        let merge_relations_table: i64 = database
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'article_merge_relations'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(merge_relations_table, 1);
+        let management_code_columns: i64 = database
+            .connection
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM pragma_table_info('categories') WHERE name = 'management_code') + (SELECT COUNT(*) FROM pragma_table_info('articles') WHERE name = 'management_code')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(management_code_columns, 2);
     }
 
     #[test]
@@ -1618,6 +3078,7 @@ mod tests {
         let settings = AppSettings {
             color_theme: crate::models::ColorTheme::Blue,
             show_top_category_in_title: false,
+            show_mascot: false,
         };
         database.save_settings(&settings).unwrap();
 
@@ -1642,6 +3103,7 @@ mod tests {
         let settings = database.get_settings().unwrap();
         assert_eq!(settings.color_theme, crate::models::ColorTheme::Blue);
         assert!(settings.show_top_category_in_title);
+        assert!(settings.show_mascot);
     }
 
     #[test]
@@ -1669,11 +3131,29 @@ mod tests {
         let mut target = Database::open(&target_path).unwrap();
         target.restore_from(&source_path).unwrap();
 
-        assert_eq!(target.schema_version().unwrap(), 4);
+        assert_eq!(target.schema_version().unwrap(), 7);
         let article = target.get_article("article").unwrap();
         assert_eq!(article.title, "旧FAQ");
         assert!(!article.is_hidden);
         assert!(article.new_badge_until.is_none());
+        let category_management_code: String = target
+            .connection
+            .query_row(
+                "SELECT management_code FROM categories WHERE id = 'cat'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let article_management_code: String = target
+            .connection
+            .query_row(
+                "SELECT management_code FROM articles WHERE id = 'article'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(category_management_code, "CAT-00001");
+        assert_eq!(article_management_code, "FAQ-00001");
     }
 
     #[test]
@@ -1751,6 +3231,82 @@ mod tests {
     }
 
     #[test]
+    fn management_codes_are_prefixed_sequential_and_never_reused() {
+        let (_directory, mut database) = temporary_database();
+        let first_category = database.create_category("一時分類", None).unwrap();
+        let first_category_code: String = database
+            .connection
+            .query_row(
+                "SELECT management_code FROM categories WHERE id = ?1",
+                [&first_category.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(first_category_code, "CAT-00001");
+        database.delete_category(&first_category.id).unwrap();
+
+        let category = database.create_category("継続分類", None).unwrap();
+        let category_code: String = database
+            .connection
+            .query_row(
+                "SELECT management_code FROM categories WHERE id = ?1",
+                [&category.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(category_code, "CAT-00002");
+
+        let body = json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"回答"}]}]});
+        let first_article_id = Uuid::now_v7().to_string();
+        database
+            .save_article(ArticleRecord {
+                id: &first_article_id,
+                is_new: true,
+                category_id: &category.id,
+                title: "最初のFAQ",
+                summary: "最初の概要",
+                body_doc: &body,
+                body_plain_text: "回答",
+                status: "published",
+                importance: 1,
+                new_badge_until: None,
+                updated_badge_until: None,
+                is_hidden: false,
+                attachments: &[],
+            })
+            .unwrap();
+        database.delete_article(&first_article_id).unwrap();
+
+        let second_article_id = Uuid::now_v7().to_string();
+        database
+            .save_article(ArticleRecord {
+                id: &second_article_id,
+                is_new: true,
+                category_id: &category.id,
+                title: "次のFAQ",
+                summary: "次の概要",
+                body_doc: &body,
+                body_plain_text: "回答",
+                status: "published",
+                importance: 1,
+                new_badge_until: None,
+                updated_badge_until: None,
+                is_hidden: false,
+                attachments: &[],
+            })
+            .unwrap();
+        let second_article_code: String = database
+            .connection
+            .query_row(
+                "SELECT management_code FROM articles WHERE id = ?1",
+                [&second_article_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(second_article_code, "FAQ-00002");
+    }
+
+    #[test]
     fn article_is_persisted_and_public_search_excludes_drafts() {
         let (directory, mut database) = temporary_database();
         let category = database.create_category("Windows", None).unwrap();
@@ -1795,22 +3351,154 @@ mod tests {
                 query: "画面".into(),
                 category_id: None,
                 include_drafts: false,
+                page: 1,
+                sort: SearchSort::UpdatedDesc,
             })
             .unwrap();
-        assert!(public_results.is_empty());
+        assert!(public_results.items.is_empty());
         let management_results = database
             .search_articles(&SearchArticlesInput {
                 query: "画面".into(),
                 category_id: None,
                 include_drafts: true,
+                page: 1,
+                sort: SearchSort::UpdatedDesc,
             })
             .unwrap();
-        assert_eq!(management_results.len(), 1);
+        assert_eq!(management_results.items.len(), 1);
     }
 
     #[test]
     fn normalizes_width_case_and_spaces() {
         assert_eq!(normalize("  ＰＣ  Setup "), "pc setup");
+    }
+
+    #[test]
+    fn public_search_returns_fifty_items_per_page_with_the_total_count() {
+        let (_directory, mut database) = temporary_database();
+        let category = database.create_category("運用", None).unwrap();
+        let body = json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"確認します"}]}]});
+        for index in 0..51 {
+            let article_id = Uuid::now_v7().to_string();
+            let title = format!("運用FAQ {index:02}");
+            let summary = format!("運用手順 {index:02}");
+            database
+                .save_article(ArticleRecord {
+                    id: &article_id,
+                    is_new: true,
+                    category_id: &category.id,
+                    title: &title,
+                    summary: &summary,
+                    body_doc: &body,
+                    body_plain_text: "確認します",
+                    status: "published",
+                    importance: 1,
+                    new_badge_until: None,
+                    updated_badge_until: None,
+                    is_hidden: false,
+                    attachments: &[],
+                })
+                .unwrap();
+        }
+
+        let first = database
+            .search_articles(&SearchArticlesInput {
+                query: String::new(),
+                category_id: None,
+                include_drafts: false,
+                page: 1,
+                sort: SearchSort::UpdatedDesc,
+            })
+            .unwrap();
+        let second = database
+            .search_articles(&SearchArticlesInput {
+                query: String::new(),
+                category_id: None,
+                include_drafts: false,
+                page: 2,
+                sort: SearchSort::UpdatedDesc,
+            })
+            .unwrap();
+
+        assert_eq!(first.total, 51);
+        assert_eq!(first.page_size, 50);
+        assert_eq!(first.items.len(), 50);
+        assert_eq!(second.total, 51);
+        assert_eq!(second.page, 2);
+        assert_eq!(second.items.len(), 1);
+        assert!(!first.items.iter().any(|item| item.id == second.items[0].id));
+    }
+
+    #[test]
+    fn public_search_sorts_all_results_by_update_date_or_importance() {
+        let (_directory, mut database) = temporary_database();
+        let category = database.create_category("並び替え", None).unwrap();
+        let body = json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"確認します"}]}]});
+        let records = [
+            ("重要度が高いFAQ", 3, "2026-01-01T00:00:00Z"),
+            ("中間のFAQ", 2, "2026-02-01T00:00:00Z"),
+            ("更新日が新しいFAQ", 1, "2026-03-01T00:00:00Z"),
+        ];
+        for (title, importance, updated_at) in records {
+            let article_id = Uuid::now_v7().to_string();
+            database
+                .save_article(ArticleRecord {
+                    id: &article_id,
+                    is_new: true,
+                    category_id: &category.id,
+                    title,
+                    summary: "並び替えを確認します",
+                    body_doc: &body,
+                    body_plain_text: "確認します",
+                    status: "published",
+                    importance,
+                    new_badge_until: None,
+                    updated_badge_until: None,
+                    is_hidden: false,
+                    attachments: &[],
+                })
+                .unwrap();
+            database
+                .connection
+                .execute(
+                    "UPDATE articles SET updated_at = ?1 WHERE id = ?2",
+                    params![updated_at, article_id],
+                )
+                .unwrap();
+        }
+
+        let sorted_titles = |sort| {
+            database
+                .search_articles(&SearchArticlesInput {
+                    query: String::new(),
+                    category_id: None,
+                    include_drafts: false,
+                    page: 1,
+                    sort,
+                })
+                .unwrap()
+                .items
+                .into_iter()
+                .map(|item| item.title)
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            sorted_titles(SearchSort::UpdatedDesc),
+            ["更新日が新しいFAQ", "中間のFAQ", "重要度が高いFAQ"]
+        );
+        assert_eq!(
+            sorted_titles(SearchSort::UpdatedAsc),
+            ["重要度が高いFAQ", "中間のFAQ", "更新日が新しいFAQ"]
+        );
+        assert_eq!(
+            sorted_titles(SearchSort::ImportanceDesc),
+            ["重要度が高いFAQ", "中間のFAQ", "更新日が新しいFAQ"]
+        );
+        assert_eq!(
+            sorted_titles(SearchSort::ImportanceAsc),
+            ["更新日が新しいFAQ", "中間のFAQ", "重要度が高いFAQ"]
+        );
     }
 
     #[test]
@@ -1844,8 +3532,11 @@ mod tests {
                     query: "非表示".into(),
                     category_id: None,
                     include_drafts: true,
+                    page: 1,
+                    sort: SearchSort::UpdatedDesc,
                 })
                 .unwrap()
+                .items
                 .is_empty()
         );
         let management = database
@@ -1916,6 +3607,188 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.code, "CDX-006");
         assert!(database.get_article(&duplicate_id).is_err());
+    }
+
+    #[test]
+    fn merge_sources_are_hidden_from_search_only_after_explicit_marking_and_can_be_restored() {
+        let (_directory, mut database) = temporary_database();
+        let category = database.create_category("PC", None).unwrap();
+        let body = json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"回答"}]}]});
+        let mut sources = Vec::new();
+        for (index, title) in ["元FAQ A", "元FAQ B"].into_iter().enumerate() {
+            let id = Uuid::now_v7().to_string();
+            let article = database
+                .save_article(ArticleRecord {
+                    id: &id,
+                    is_new: true,
+                    category_id: &category.id,
+                    title,
+                    summary: "元FAQの概要",
+                    body_doc: &body,
+                    body_plain_text: &format!("回答{index}"),
+                    status: "published",
+                    importance: 1,
+                    new_badge_until: None,
+                    updated_badge_until: None,
+                    is_hidden: false,
+                    attachments: &[],
+                })
+                .unwrap();
+            sources.push(CodexSourceArticle {
+                article_id: article.id,
+                source_updated_at: article.updated_at,
+            });
+        }
+
+        let request_id = Uuid::now_v7().to_string();
+        let target_id = Uuid::now_v7().to_string();
+        database
+            .record_codex_proposal(&CodexFaqProposal {
+                format_version: 2,
+                request_id: request_id.clone(),
+                series_id: Some(request_id.clone()),
+                created_at: Utc::now().to_rfc3339(),
+                proposal_kind: CodexProposalKind::Merge,
+                source_articles: sources.clone(),
+                faq: crate::models::CodexFaqDraft {
+                    title: "統合FAQ".into(),
+                    summary: "統合した概要".into(),
+                    body_doc: body.clone(),
+                    importance: 2,
+                },
+                existing_category_candidates: vec![],
+                new_category_proposal: None,
+            })
+            .unwrap();
+        let (target, _) = database
+            .accept_codex_proposal(CodexProposalArticleRecord {
+                request_id: &request_id,
+                proposal_kind: CodexProposalKind::Merge,
+                source_articles: &sources,
+                article_id: &target_id,
+                category_id: &category.id,
+                new_category: None,
+                title: "統合FAQ",
+                summary: "統合した概要",
+                body_doc: &body,
+                body_plain_text: "統合した回答",
+                importance: 2,
+            })
+            .unwrap();
+        assert_eq!(target.status, "draft");
+        assert!(
+            database
+                .requires_new_badge_for_merge_publication(&target_id)
+                .unwrap()
+        );
+        let context = database
+            .get_codex_merge_publication_context(&target_id)
+            .unwrap()
+            .unwrap();
+        assert!(context.can_mark_merged);
+        assert!(!context.all_sources_merged);
+
+        database
+            .save_article(ArticleRecord {
+                id: &target_id,
+                is_new: false,
+                category_id: &category.id,
+                title: "統合FAQ",
+                summary: "統合した概要",
+                body_doc: &body,
+                body_plain_text: "統合した回答",
+                status: "published",
+                importance: 2,
+                new_badge_until: Some("2026-08-31"),
+                updated_badge_until: None,
+                is_hidden: false,
+                attachments: &[],
+            })
+            .unwrap();
+        assert_eq!(
+            database
+                .mark_codex_merge_sources(&target_id)
+                .unwrap()
+                .marked_count,
+            2
+        );
+
+        let public = database
+            .search_articles(&SearchArticlesInput {
+                query: String::new(),
+                category_id: None,
+                include_drafts: false,
+                page: 1,
+                sort: SearchSort::UpdatedDesc,
+            })
+            .unwrap();
+        assert_eq!(public.items.len(), 1);
+        assert_eq!(public.items[0].id, target_id);
+        let source = database.get_article(&sources[0].article_id).unwrap();
+        assert_eq!(
+            source
+                .merge_info
+                .as_ref()
+                .map(|info| info.target_article_id.as_str()),
+            Some(target_id.as_str())
+        );
+        let hidden_target_error = database
+            .save_article(ArticleRecord {
+                id: &target_id,
+                is_new: false,
+                category_id: &category.id,
+                title: "統合FAQ",
+                summary: "統合した概要",
+                body_doc: &body,
+                body_plain_text: "統合した回答",
+                status: "published",
+                importance: 2,
+                new_badge_until: Some("2026-08-31"),
+                updated_badge_until: None,
+                is_hidden: true,
+                attachments: &[],
+            })
+            .unwrap_err();
+        assert_eq!(hidden_target_error.code, "ART-009");
+        assert_eq!(
+            database.delete_article(&target_id).unwrap_err().code,
+            "ART-009"
+        );
+
+        let restored = database
+            .clear_article_merge(&sources[0].article_id)
+            .unwrap();
+        assert!(restored.merge_info.is_none());
+        let public = database
+            .search_articles(&SearchArticlesInput {
+                query: String::new(),
+                category_id: None,
+                include_drafts: false,
+                page: 1,
+                sort: SearchSort::UpdatedDesc,
+            })
+            .unwrap();
+        assert_eq!(public.items.len(), 2);
+
+        database
+            .clear_article_merge(&sources[1].article_id)
+            .unwrap();
+        database
+            .connection
+            .execute(
+                "UPDATE articles SET updated_at = '2099-01-01T00:00:00Z' WHERE id = ?1",
+                [&sources[1].article_id],
+            )
+            .unwrap();
+        let stale_error = database.mark_codex_merge_sources(&target_id).unwrap_err();
+        assert_eq!(stale_error.code, "CDX-012");
+        assert!(
+            database
+                .get_article(&sources[0].article_id)
+                .unwrap()
+                .merge_info
+                .is_none()
+        );
     }
 
     #[test]
@@ -2138,8 +4011,11 @@ mod tests {
                     query: "ネットワーク".into(),
                     category_id: None,
                     include_drafts: true,
+                    page: 1,
+                    sort: SearchSort::UpdatedDesc,
                 })
                 .unwrap()
+                .items
                 .is_empty()
         );
         let deleted_page = database
@@ -2161,10 +4037,254 @@ mod tests {
                     query: "ネットワーク".into(),
                     category_id: None,
                     include_drafts: false,
+                    page: 1,
+                    sort: SearchSort::UpdatedDesc,
                 })
                 .unwrap()
+                .items
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn authenticates_empty_password_users_and_keeps_the_last_admin_active() {
+        let (_directory, database) = temporary_database();
+        let initial = database.authenticate_user("0000", "").unwrap();
+        assert_eq!(initial.role, UserRole::Admin);
+        assert_eq!(
+            database
+                .authenticate_user("0000", "wrong")
+                .unwrap_err()
+                .code,
+            "AUTH-001"
+        );
+
+        let added = database
+            .create_user("operator", "担当者", "", UserRole::User)
+            .unwrap();
+        assert_eq!(
+            database.authenticate_user("operator", "").unwrap().id,
+            added.id
+        );
+        database.set_user_active(&added.id, false).unwrap();
+        assert_eq!(
+            database.authenticate_user("operator", "").unwrap_err().code,
+            "AUTH-001"
+        );
+        assert_eq!(
+            database
+                .set_user_active(&initial.id, false)
+                .unwrap_err()
+                .code,
+            "USR-002"
+        );
+    }
+
+    #[test]
+    fn password_policy_only_applies_to_future_user_changes() {
+        let (_directory, database) = temporary_database();
+        let existing = database
+            .create_user("existing", "既存担当者", "", UserRole::User)
+            .unwrap();
+
+        let policy = PasswordPolicySettings {
+            allow_empty_passwords: false,
+        };
+        database.save_password_policy(&policy).unwrap();
+        assert_eq!(database.get_password_policy().unwrap(), policy);
+
+        assert_eq!(
+            database.authenticate_user("existing", "").unwrap().id,
+            existing.id
+        );
+        assert_eq!(
+            database
+                .create_user("new-empty", "新規担当者", "", UserRole::User)
+                .unwrap_err()
+                .code,
+            "USR-004"
+        );
+
+        let new_user = database
+            .create_user("new-user", "新規担当者", "password", UserRole::User)
+            .unwrap();
+        assert_eq!(
+            database
+                .reset_user_password(&new_user.id, "")
+                .unwrap_err()
+                .code,
+            "USR-004"
+        );
+        assert_eq!(
+            database
+                .authenticate_user("new-user", "password")
+                .unwrap()
+                .id,
+            new_user.id
+        );
+    }
+
+    #[test]
+    fn csv_round_trip_preserves_rich_body_until_the_answer_cell_changes() {
+        let (directory, mut database) = temporary_database();
+        let operator = database
+            .create_user("writer", "作成担当", "", UserRole::User)
+            .unwrap();
+        let category = database.create_category("PC", None).unwrap();
+        let body = json!({
+            "type": "doc",
+            "content": [{
+                "type": "table",
+                "content": [{"type":"tableRow","content":[{"type":"tableCell","content":[{"type":"paragraph","content":[{"type":"text","text":"表の回答"}]}]}]}]
+            }]
+        });
+        let article_id = Uuid::now_v7().to_string();
+        let created = database
+            .save_article_as(
+                ArticleRecord {
+                    id: &article_id,
+                    is_new: true,
+                    category_id: &category.id,
+                    title: "表を含むFAQ",
+                    summary: "元の概要",
+                    body_doc: &body,
+                    body_plain_text: "表の回答",
+                    status: "published",
+                    importance: 1,
+                    new_badge_until: None,
+                    updated_badge_until: None,
+                    is_hidden: false,
+                    attachments: &[],
+                },
+                &operator.id,
+            )
+            .unwrap();
+        assert_eq!(created.created_by_display_name, "作成担当");
+
+        let csv_path = directory.path().join("roundtrip.knowledge-faq.csv");
+        database.export_faq_csv(&csv_path).unwrap();
+        let exported_bytes = fs::read(&csv_path).unwrap();
+        let exported_content = exported_bytes
+            .strip_prefix(&[0xEF, 0xBB, 0xBF])
+            .unwrap_or(&exported_bytes);
+        let exported_text = String::from_utf8(exported_content.to_vec()).unwrap();
+        assert!(!exported_text.contains(&article_id));
+        assert!(!exported_text.contains(&category.id));
+        let mut exported_reader = csv::Reader::from_reader(exported_content);
+        assert!(
+            exported_reader
+                .headers()
+                .unwrap()
+                .iter()
+                .eq(crate::services::csv_transfer::HEADERS)
+        );
+        let exported_record = exported_reader.records().next().unwrap().unwrap();
+        assert_eq!(exported_record.get(0), Some("2"));
+        assert_eq!(exported_record.get(1), Some("FAQ-00001"));
+        assert_eq!(exported_record.get(2), Some("CAT-00001"));
+        rewrite_csv_cell(&csv_path, 5, "Excelで変更した概要");
+        let preview = database.inspect_faq_csv(&csv_path).unwrap();
+        assert_eq!(preview.update_count, 1);
+        assert_eq!(preview.body_replacement_count, 0);
+        database
+            .import_faq_csv(
+                &csv_path,
+                &preview.file_sha256,
+                &operator.id,
+                "safety.faqbackup".into(),
+            )
+            .unwrap();
+        let summary_only = database.get_article(&article_id).unwrap();
+        assert_eq!(summary_only.summary, "Excelで変更した概要");
+        assert_eq!(summary_only.body_doc, body);
+
+        database
+            .save_article_as(
+                ArticleRecord {
+                    id: &article_id,
+                    is_new: false,
+                    category_id: &category.id,
+                    title: "アプリ内で後から変更したタイトル",
+                    summary: &summary_only.summary,
+                    body_doc: &summary_only.body_doc,
+                    body_plain_text: &summary_only.body_plain_text,
+                    status: "published",
+                    importance: 1,
+                    new_badge_until: None,
+                    updated_badge_until: None,
+                    is_hidden: false,
+                    attachments: &[],
+                },
+                &operator.id,
+            )
+            .unwrap();
+        let stale_preview = database.inspect_faq_csv(&csv_path).unwrap();
+        assert_eq!(stale_preview.stale_overwrite_count, 1);
+        database
+            .import_faq_csv(
+                &csv_path,
+                &stale_preview.file_sha256,
+                &operator.id,
+                "safety.faqbackup".into(),
+            )
+            .unwrap();
+        assert_eq!(
+            database.get_article(&article_id).unwrap().title,
+            "表を含むFAQ"
+        );
+
+        database.export_faq_csv(&csv_path).unwrap();
+        let before_file_change = database.inspect_faq_csv(&csv_path).unwrap();
+        rewrite_csv_cell(&csv_path, 6, "Excelで置き換えた回答");
+        assert_eq!(
+            database
+                .import_faq_csv(
+                    &csv_path,
+                    &before_file_change.file_sha256,
+                    &operator.id,
+                    "safety.faqbackup".into(),
+                )
+                .unwrap_err()
+                .code,
+            "CSV-007"
+        );
+        let preview = database.inspect_faq_csv(&csv_path).unwrap();
+        assert_eq!(preview.body_replacement_count, 1);
+        database
+            .import_faq_csv(
+                &csv_path,
+                &preview.file_sha256,
+                &operator.id,
+                "safety.faqbackup".into(),
+            )
+            .unwrap();
+        let replaced = database.get_article(&article_id).unwrap();
+        assert_eq!(replaced.body_plain_text, "Excelで置き換えた回答");
+        assert_eq!(replaced.body_doc["content"][0]["type"], "paragraph");
+        assert_eq!(replaced.updated_by_display_name, "作成担当");
+    }
+
+    fn rewrite_csv_cell(path: &Path, column: usize, value: &str) {
+        let bytes = fs::read(path).unwrap();
+        let content = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes);
+        let mut reader = csv::Reader::from_reader(content);
+        let headers = reader.headers().unwrap().clone();
+        let mut records = reader.records().map(Result::unwrap).collect::<Vec<_>>();
+        records[0] = records[0]
+            .iter()
+            .enumerate()
+            .map(|(index, cell)| if index == column { value } else { cell })
+            .collect();
+        let mut writer = csv::WriterBuilder::new()
+            .terminator(csv::Terminator::CRLF)
+            .from_writer(Vec::new());
+        writer.write_record(&headers).unwrap();
+        for record in records {
+            writer.write_record(&record).unwrap();
+        }
+        let mut output = vec![0xEF, 0xBB, 0xBF];
+        output.extend(writer.into_inner().unwrap());
+        fs::write(path, output).unwrap();
     }
 }

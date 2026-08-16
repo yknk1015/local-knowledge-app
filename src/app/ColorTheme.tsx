@@ -15,14 +15,17 @@ import type { AppSettings, ColorTheme } from "../types/domain";
 interface ColorThemeContextValue {
   colorTheme: ColorTheme;
   showTopCategoryInTitle: boolean;
+  showMascot: boolean;
   updateColorTheme: (nextTheme: ColorTheme) => Promise<void>;
   updateShowTopCategoryInTitle: (enabled: boolean) => Promise<void>;
+  updateShowMascot: (enabled: boolean) => Promise<void>;
 }
 
 const ColorThemeContext = createContext<ColorThemeContextValue | null>(null);
 const DEFAULT_SETTINGS: AppSettings = {
   colorTheme: "green",
   showTopCategoryInTitle: true,
+  showMascot: true,
 };
 
 export function ColorThemeProvider({ children }: { children: ReactNode }) {
@@ -81,14 +84,21 @@ export function ColorThemeProvider({ children }: { children: ReactNode }) {
     [updateSettings],
   );
 
+  const updateShowMascot = useCallback(
+    (enabled: boolean) => updateSettings({ showMascot: enabled }),
+    [updateSettings],
+  );
+
   const value = useMemo(
     () => ({
       colorTheme: settings.colorTheme,
       showTopCategoryInTitle: settings.showTopCategoryInTitle,
+      showMascot: settings.showMascot,
       updateColorTheme,
       updateShowTopCategoryInTitle,
+      updateShowMascot,
     }),
-    [settings, updateColorTheme, updateShowTopCategoryInTitle],
+    [settings, updateColorTheme, updateShowMascot, updateShowTopCategoryInTitle],
   );
 
   return <ColorThemeContext.Provider value={value}>{children}</ColorThemeContext.Provider>;
