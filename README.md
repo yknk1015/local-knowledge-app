@@ -114,6 +114,8 @@ npm run tauri build
 
 生成物は`src-tauri/target/release/bundle/nsis/`へ出力される。GitHub Actionsでも同じコマンドと検査を実行し、SHA-256を記録してNSIS成果物を保存する。
 
+別PCでリリースリハーサルを行う場合は、`Surface実機リハーサル手順_0.3.3.md`と`Surface実機試験結果_0.3.3.md`を使用します。試験には会社FAQを使わず、出所を固定した旧版、合成FAQ、6桁管理ID、10,000件CSV、外部HTMLを含む検証用パッケージだけをSurfaceへ渡します。
+
 ## FAQデータの保存先
 
 通常版は次の利用者専用フォルダを使用します。

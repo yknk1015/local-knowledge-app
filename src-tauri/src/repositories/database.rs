@@ -7239,6 +7239,54 @@ mod tests {
     }
 
     #[test]
+    fn surface_six_digit_management_id_fixture_imports_without_errors() {
+        let (directory, mut database) = temporary_database();
+        let fixture_path = directory
+            .path()
+            .join("six-digit-management-id.knowledge-export.json");
+        fs::write(
+            &fixture_path,
+            include_bytes!("../../../tests/release-fixtures/six-digit-management-id.fixture.json"),
+        )
+        .unwrap();
+
+        let preview = database.inspect_json(&fixture_path).unwrap();
+        assert_eq!(preview.error_count, 0, "{:?}", preview.errors);
+        assert_eq!(preview.counts.categories, 1);
+        assert_eq!(preview.counts.articles, 1);
+        assert_eq!(preview.create_count, 2);
+
+        let imported = database
+            .import_json(
+                &fixture_path,
+                &preview.file_sha256,
+                INITIAL_ADMIN_USER_ID,
+                "before-surface-fixture.faqbackup".into(),
+            )
+            .unwrap();
+        assert_eq!(imported.created_count, 2);
+
+        let category_code: String = database
+            .connection
+            .query_row(
+                "SELECT management_code FROM categories WHERE id = ?1",
+                ["0198c6f0-0000-7000-8000-000000000001"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let article_code: String = database
+            .connection
+            .query_row(
+                "SELECT management_code FROM articles WHERE id = ?1",
+                ["0198c6f0-0000-7000-8000-000000000002"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(category_code, "CAT-100000");
+        assert_eq!(article_code, "FAQ-100000");
+    }
+
+    #[test]
     fn json_round_trip_validates_relations_details_and_rolls_back_partial_failure() {
         let (directory, mut source) = temporary_database();
         let category = source.create_category("PC", None).unwrap();

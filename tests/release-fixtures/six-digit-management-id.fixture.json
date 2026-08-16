@@ -1,0 +1,75 @@
+{
+  "formatVersion": 1,
+  "exportedAt": "2026-08-16T00:00:00Z",
+  "categories": [
+    {
+      "id": "0198c6f0-0000-7000-8000-000000000001",
+      "managementCode": "CAT-100000",
+      "parentId": null,
+      "name": "6桁管理ID確認",
+      "description": "Surface実機で管理IDの表示幅を確認するための合成分類です。",
+      "sortOrder": 100000,
+      "createdAt": "2026-08-16T00:00:00Z",
+      "updatedAt": "2026-08-16T00:00:00Z"
+    }
+  ],
+  "tags": [],
+  "synonymGroups": [],
+  "articles": [
+    {
+      "id": "0198c6f0-0000-7000-8000-000000000002",
+      "managementCode": "FAQ-100000",
+      "categoryId": "0198c6f0-0000-7000-8000-000000000001",
+      "title": "6桁管理IDの表示を確認するには？",
+      "summary": "FAQ管理画面で6桁の管理IDが欠けずに表示されることを確認します。",
+      "bodyDoc": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "■確認方法"
+              }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "1. FAQ管理画面を詳細表示へ切り替えます。"
+              }
+            ]
+          }
+        ]
+      },
+      "status": "draft",
+      "importance": 1,
+      "newBadgeUntil": null,
+      "updatedBadgeUntil": null,
+      "isHidden": false,
+      "createdAt": "2026-08-16T00:00:00Z",
+      "updatedAt": "2026-08-16T00:00:00Z",
+      "deletedAt": null,
+      "symptoms": [],
+      "causes": [],
+      "targets": [
+        "Surface実機"
+      ],
+      "errorCodes": [],
+      "procedures": [
+        "FAQ管理画面を詳細表示へ切り替える"
+      ],
+      "cautions": [],
+      "tagIds": [],
+      "searchTerms": [
+        "FAQ-100000",
+        "6桁管理ID"
+      ]
+    }
+  ],
+  "relations": [],
+  "mergeRelations": []
+}
