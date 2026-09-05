@@ -10,9 +10,15 @@ $packageRoot = [IO.Path]::GetFullPath($PackageDirectory).TrimEnd('\', '/')
 $verified = Test-CSharpTrialPackage $packageRoot
 $template = Join-Path $PSScriptRoot 'installer/KnowledgeApp.CSharp.Trial.nsi'
 Assert-CSharpPackageNormalPath $template
-$makensis = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'tauri/NSIS/makensis.exe'
+$makensis = $env:KNOWLEDGEAPP_NSIS_COMPILER
+if (-not $makensis) {
+    $command = Get-Command makensis.exe -CommandType Application -ErrorAction SilentlyContinue
+    if ($command) { $makensis = $command.Source }
+}
+if (-not $makensis) { throw 'Install NSIS 3 and add makensis.exe to PATH, or explicitly set KNOWLEDGEAPP_NSIS_COMPILER to its absolute path. No compiler is downloaded automatically.' }
+if (-not [IO.Path]::IsPathFullyQualified($makensis)) { throw 'The explicitly selected NSIS compiler path must be absolute.' }
 Assert-CSharpPackageNormalPath $makensis
-if (-not (Test-Path -LiteralPath $makensis -PathType Leaf)) { throw 'The locally cached NSIS compiler is required; no tool is downloaded automatically.' }
+if (-not (Test-Path -LiteralPath $makensis -PathType Leaf)) { throw 'The explicitly selected NSIS compiler does not exist.' }
 if ($MissingRuntimeTest -and -not $SyntheticTestRoot) { throw 'A missing-runtime fixture is restricted to an isolated synthetic installer root.' }
 
 $installRoot = '$LOCALAPPDATA\Programs\KnowledgeApp-CSharp'

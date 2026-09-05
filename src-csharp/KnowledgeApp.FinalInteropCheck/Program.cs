@@ -9,14 +9,18 @@ internal static partial class FinalInteropCheck
     private static readonly List<string> Roots = [];
     private static int _passed;
     private static readonly UTF8Encoding Utf8 = new(false, true);
+    private static bool _withLegacy;
 
     private static async Task<int> Main(string[] args)
     {
         try
         {
-            if (args.Length != 0) throw new ArgumentException("No input paths or real data are accepted.");
+            _withLegacy = args.SequenceEqual(new[] { "--with-legacy" });
+            if (args.Length != 0 && !_withLegacy) throw new ArgumentException("Only --with-legacy is accepted; no real data paths are accepted.");
+            if (_withLegacy) _ = LegacySource.Resolve();
             CheckProductionRouteContracts();
-            await CheckBackupRoundtrip();
+            if (_withLegacy) await CheckBackupRoundtrip();
+            else Console.WriteLine("NOT RUN: Rust cross-runtime backup checks. Use --with-legacy and an explicitly selected legacy source to run them.");
             await CheckPluginCommands("pwsh");
             await CheckPluginCommands(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe"));
             Console.WriteLine($"FinalInteropCheck: {_passed} checks passed; generated synthetic data only. Plugin command integration is not an installed-plugin/AI-session acceptance test.");
@@ -55,7 +59,7 @@ internal static partial class FinalInteropCheck
     private static string Checkout()
     {
         var ancestor = new DirectoryInfo(AppContext.BaseDirectory);
-        while (ancestor is not null && !File.Exists(Path.Combine(ancestor.FullName, "src-tauri", "Cargo.toml"))) ancestor = ancestor.Parent;
+        while (ancestor is not null && !File.Exists(Path.Combine(ancestor.FullName, "src-csharp", "KnowledgeApp.Data", "KnowledgeApp.Data.csproj"))) ancestor = ancestor.Parent;
         return ancestor?.FullName ?? throw new InvalidOperationException("Run from the source checkout.");
     }
 

@@ -1,0 +1,48 @@
+name: Explicit archived Tauri interoperability
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout current C# source
+        uses: actions/checkout@v7
+      - name: Checkout fixed legacy baseline separately
+        uses: actions/checkout@v7
+        with:
+          ref: 277f38c2a374889d21cb61798ab072dfb16e98be
+          path: legacy-checkout
+      - name: Select explicit legacy source
+        shell: pwsh
+        run: |
+          $source = Join-Path $env:GITHUB_WORKSPACE 'legacy-checkout/src-tauri'
+          [IO.File]::AppendAllText($env:GITHUB_ENV, "KNOWLEDGEAPP_LEGACY_SOURCE=$source`n", [Text.UTF8Encoding]::new($false))
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Prepare legacy frontend for Rust build
+        working-directory: legacy-checkout
+        run: npm ci
+      - name: Build legacy frontend
+        working-directory: legacy-checkout
+        run: npm run build
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.204
+      - name: Check archived Rust formatting
+        run: cargo fmt --manifest-path legacy-checkout/src-tauri/Cargo.toml --check
+      - name: Check archived Rust lints
+        run: cargo clippy --manifest-path legacy-checkout/src-tauri/Cargo.toml --all-targets -- -D warnings
+      - name: Test archived Rust and prepare offline dependencies
+        run: cargo test --manifest-path legacy-checkout/src-tauri/Cargo.toml --locked
+      - name: Verify C# and archived Rust Codex JSON interoperability
+        run: dotnet run --project src-csharp/KnowledgeApp.CodexInteropCheck --configuration Release
+      - name: Verify C# and archived Rust backup roundtrip
+        run: dotnet run --project src-csharp/KnowledgeApp.FinalInteropCheck --configuration Release -- --with-legacy

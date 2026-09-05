@@ -10,6 +10,6 @@
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />
   </ItemGroup>
   <ItemGroup>
-    <EmbeddedResource Include="..\..\src-tauri\migrations\*.sql" Link="Migrations\%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Migrations\*.sql" />
   </ItemGroup>
 </Project>

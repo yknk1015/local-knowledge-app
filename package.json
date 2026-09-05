@@ -1,15 +1,14 @@
 {
   "name": "web-knowledge-system",
   "private": true,
-  "version": "0.4.4",
+  "version": "0.5.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "tauri": "tauri"
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",
@@ -29,7 +28,6 @@
     "react-router-dom": "7.18.2"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "2.11.4",
     "@testing-library/jest-dom": "7.0.0",
     "@testing-library/react": "16.3.2",
     "@types/node": "26.2.0",

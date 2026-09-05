@@ -50,7 +50,7 @@ internal static partial class FinalInteropCheck
             article, categoryId = category.Id, userId = user.Id, imageId = staged.Id, imageSha256 = imageHash,
             backupSha256 = backupHash, searchId
         }, CodexJson.Options), Utf8);
-        var info = new ProcessStartInfo("cargo") { WorkingDirectory = Path.Combine(Checkout(), "src-tauri") };
+        var info = new ProcessStartInfo("cargo") { WorkingDirectory = LegacySource.Resolve() };
         foreach (var argument in new[] { "test", "--offline", "--lib", "final_interop_backup_csharp_roundtrip", "--", "--ignored", "--nocapture" }) info.ArgumentList.Add(argument);
         info.Environment["KNOWLEDGEAPP_FINAL_INTEROP_ROOT"] = sourceRoot;
         var rust = await Run(info);

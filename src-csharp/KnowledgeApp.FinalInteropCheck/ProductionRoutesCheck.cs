@@ -11,9 +11,13 @@ internal static partial class FinalInteropCheck
     {
         // Resolve strings only: this test never probes either real user-data root.
         var localFolder = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        using var tauriConfiguration = JsonDocument.Parse(File.ReadAllText(Path.Combine(Checkout(), "src-tauri", "tauri.conf.json"), Utf8));
-        var legacyId = tauriConfiguration.RootElement.GetProperty("identifier").GetString()!;
-        Check(legacyId == "jp.local.webknowledgesystem", "Legacy Tauri identifier stays unchanged for an independent rollback installation");
+        const string legacyId = "jp.local.webknowledgesystem";
+        if (_withLegacy)
+        {
+            using var tauriConfiguration = JsonDocument.Parse(File.ReadAllText(Path.Combine(LegacySource.Resolve(), "tauri.conf.json"), Utf8));
+            Check(tauriConfiguration.RootElement.GetProperty("identifier").GetString() == legacyId,
+                "Explicit archived Tauri source retains its independent rollback identifier");
+        }
         Check(ProductionDataRoot.DirectoryName == "jp.local.webknowledgesystem.csharp" &&
             ProductionDataRoot.FixedPath == Path.Combine(localFolder, ProductionDataRoot.DirectoryName),
             "C# production resolves its new fixed Known Folder destination without opening user data");

@@ -113,23 +113,21 @@ jobs:
       - name: Verify approved C# primary use does not mark pending final checks as passed
         run: dotnet run --project src-csharp/KnowledgeApp.MigrationGate/KnowledgeApp.MigrationGate.csproj --configuration Release -- dist
 
-      - name: Check legacy Rust compatibility-source formatting
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
-
-      - name: Run legacy Rust compatibility-source lints
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
-
-      - name: Run retained legacy Rust compatibility tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
-
-      - name: Verify C# and Rust Codex JSON interoperability on synthetic data
-        run: dotnet run --project src-csharp/KnowledgeApp.CodexInteropCheck/KnowledgeApp.CodexInteropCheck.csproj --configuration Release
-
-      - name: Verify actual backup and PowerShell command interoperability on synthetic data
+      - name: Verify C# production routes and PowerShell commands on synthetic data
         run: dotnet run --project src-csharp/KnowledgeApp.FinalInteropCheck --configuration Release
 
-      - name: Build legacy Tauri compatibility installer and prepare cached NSIS compiler
-        run: npm run tauri build
+      - name: Verify embedded migration SQL and legacy-source independence
+        shell: pwsh
+        run: ./scripts/Test-CSharpSourceIndependence.ps1
+
+      - name: Set up standalone NSIS compiler (no Tauri build)
+        shell: pwsh
+        run: |
+          choco install nsis --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'NSIS installation failed.' }
+          $compiler = Join-Path ${env:ProgramFiles(x86)} 'NSIS/makensis.exe'
+          if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) { throw 'Standalone NSIS compiler is missing.' }
+          [IO.File]::AppendAllText($env:GITHUB_ENV, "KNOWLEDGEAPP_NSIS_COMPILER=$compiler`n", [Text.UTF8Encoding]::new($false))
 
       - name: Verify C# NSIS lifecycle in an owned isolated installation
         shell: pwsh
@@ -153,16 +151,6 @@ jobs:
         shell: pwsh
         run: |
           ./scripts/check-no-runtime-data.ps1 -ReleaseDirectory ./dist
-          ./scripts/check-no-runtime-data.ps1 -ReleaseDirectory ./src-tauri/target/release
-          ./scripts/check-no-runtime-data.ps1 -ReleaseDirectory ./src-tauri/target/release/bundle
-          ./scripts/check-release-bundle-config.ps1 -InstallerDirectory ./src-tauri/target/release/bundle/nsis
-
-      - name: Record retained legacy compatibility-installer SHA-256
-        shell: pwsh
-        run: |
-          Get-ChildItem -LiteralPath ./src-tauri/target/release/bundle/nsis -Filter '*.exe' -File |
-            Get-FileHash -Algorithm SHA256 |
-            Format-Table -AutoSize
 
       - name: Upload the primary C# Windows release artifacts
         uses: actions/upload-artifact@v7

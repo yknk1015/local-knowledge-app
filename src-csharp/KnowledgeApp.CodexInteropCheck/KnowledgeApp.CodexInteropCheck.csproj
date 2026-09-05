@@ -7,6 +7,7 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="..\InteropSupport\LegacySource.cs" Link="LegacySource.cs" />
     <ProjectReference Include="..\KnowledgeApp.Data\KnowledgeApp.Data.csproj" />
   </ItemGroup>
 </Project>

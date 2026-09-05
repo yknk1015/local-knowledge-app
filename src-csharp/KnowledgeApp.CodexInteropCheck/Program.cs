@@ -9,6 +9,7 @@ var passed = 0;
 try
 {
     if (args.Length != 0) throw new ArgumentException("This test accepts no input paths.");
+    _ = LegacySource.Resolve();
     var options = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, MaxDepth = 128 };
     foreach (var depth in new[] { 127, 128, 129 })
     {
@@ -146,12 +147,9 @@ static int ContainerDepth(JsonElement value) => value.ValueKind switch
 
 static async Task RunRustRoundtrip(string root)
 {
-    var ancestor = new DirectoryInfo(AppContext.BaseDirectory);
-    while (ancestor is not null && !File.Exists(Path.Combine(ancestor.FullName, "src-tauri", "Cargo.toml"))) ancestor = ancestor.Parent;
-    if (ancestor is null) throw new InvalidOperationException("Run this test from its source checkout.");
     var info = new ProcessStartInfo("cargo")
     {
-        WorkingDirectory = Path.Combine(ancestor.FullName, "src-tauri"),
+        WorkingDirectory = LegacySource.Resolve(),
         UseShellExecute = false,
         CreateNoWindow = true,
         RedirectStandardOutput = true,

@@ -8,7 +8,7 @@ Windows 11で利用する、一人用のローカルFAQ・ナレッジ管理ア�
 
 利用者から今回のPCでの復元・確認完了の報告を受領し、C#正式版への本番切替を完了しました。会社PCでの切替や実プラグイン往復など、未報告・未実施の確認を合格へ置き換えるものではありません。現在の確認範囲は[第17段階の切替記録](src-csharp/第17段階_CSharp正式切替記録.md)を参照してください。
 
-旧Tauri版のリポジトリ外保管は[整理計画](旧Tauri版_リポジトリ外保管計画.md)にまとめています。現在のGitHubリポジトリを継続し、C#の移行SQL・互換試験・配布手順の依存を外してから整理する案です。現時点では旧ソースを移動・削除していません。
+旧Tauri版は[外部保管記録](旧Tauri版_外部保管実施記録.md)のとおり、ソースZIPと旧インストーラーをリポジトリ外へ保存しています。現在のGitHubリポジトリをC#主系として継続します。移行SQLはC#管理下へ移し、通常のビルド・試験・配布は旧ソースを必要としません。旧版との比較は明示的な別経路で実行します。
 
 次を実装しています。
 
@@ -110,7 +110,11 @@ dotnet run --project ./src-csharp/KnowledgeApp.CSharp --configuration Release --
 
 開発・画面試験では必ず`--rehearsal`を付け、C#専用検証領域を使います。引数なしのC#起動は正式な本番領域を開きます。UI変更後は`npm run build`で更新してからC#を再ビルドしてください。バックエンドは`src-csharp/KnowledgeApp.Data`、ネイティブ画面は`src-csharp/KnowledgeApp.CSharp`、共通UIは`src`で開発します。
 
-旧Tauriの`npm run tauri dev`は通常の開発起動には使用しません。互換回帰が必要な場合だけ、既存データを使わない試験境界で実行します。
+この作業ツリーには旧`src-tauri`とTauri CLI起動コマンドを置きません。フロントエンドの互換APIパッケージは既存の分岐・試験を維持するため残していますが、C#の通常開発でRust/Tauriのビルドは不要です。
+
+旧版との比較が必要な場合は、外部保管した`src-tauri`の絶対パスを開発者が`KNOWLEDGEAPP_LEGACY_SOURCE`へ設定し、`KnowledgeApp.CodexInteropCheck`または`KnowledgeApp.FinalInteropCheck -- --with-legacy`を明示実行します。いずれも合成データだけを使用し、未指定時は旧ソースや利用者データを自動探索しません。GitHub Actionsでは手動起動の`legacy-compatibility.yml`を使用します。
+
+NSIS配布物の作成には独立したNSIS 3の`makensis.exe`をPATHへ追加するか、`KNOWLEDGEAPP_NSIS_COMPILER`へ絶対パスを指定します。旧Tauriビルドによる準備は不要です。
 
 ## テスト
 
@@ -132,10 +136,12 @@ dotnet run --project ./src-csharp/KnowledgeApp.MailCheck --configuration Release
 旧Tauriとの互換回帰を実行する場合：
 
 ```powershell
-cargo test --manifest-path src-tauri/Cargo.toml --locked
+# KNOWLEDGEAPP_LEGACY_SOURCEは、保管したsrc-tauriの絶対パスを事前に設定する。
+# 移動した古いtargetは再利用せず、新しいCARGO_TARGET_DIRを使う。
+if (-not $env:KNOWLEDGEAPP_LEGACY_SOURCE) { throw '旧ソースの保存先を明示してください。' }
+cargo test --manifest-path (Join-Path $env:KNOWLEDGEAPP_LEGACY_SOURCE 'Cargo.toml') --locked
 dotnet run --project ./src-csharp/KnowledgeApp.CodexInteropCheck --configuration Release
-dotnet run --project ./src-csharp/KnowledgeApp.FinalInteropCheck --configuration Release
-pwsh -NoProfile -File ./scripts/test-release-performance.ps1
+dotnet run --project ./src-csharp/KnowledgeApp.FinalInteropCheck --configuration Release -- --with-legacy
 ```
 
 正式な利用者単位NSISインストーラーを生成する場合：
@@ -150,9 +156,9 @@ $releaseInstaller = & ./scripts/New-CSharpInstaller.ps1 -PackageDirectory $relea
 $releaseInstaller
 ```
 
-生成先は各スクリプトの結果に返されます。正式成果物は`KnowledgeApp-CSharp-0.5.0-win-x64.zip`と`KnowledgeApp-CSharp-0.5.0-setup.exe`です。ZIPはフォルダー全体で使用し、exeだけを移動しないでください。インストーラー生成には既存の`%LOCALAPPDATA%/tauri/NSIS/makensis.exe`が必要で、スクリプトはコンパイラーを自動取得しません。CIでは旧Tauri互換ビルドが準備するコンパイラーを使用します。
+生成先は各スクリプトの結果に返されます。正式成果物は`KnowledgeApp-CSharp-0.5.0-win-x64.zip`と`KnowledgeApp-CSharp-0.5.0-setup.exe`です。ZIPはフォルダー全体で使用し、exeだけを移動しないでください。NSISコンパイラーはPATHまたは`KNOWLEDGEAPP_NSIS_COMPILER`で明示し、生成スクリプトは自動取得しません。CIではNSISを独立して準備します。
 
-GitHub ActionsはC#正式パッケージとNSISを主成果物として保存します。旧Tauriのビルド・データ混入検査・互換試験は残しますが、旧版のインストーラーを今後の正式成果物として案内しません。パッケージのSHA-256は整合性確認用であり、コード署名や会社の配布承認の代替ではありません。
+GitHub Actionsの通常CIはC#正式パッケージとNSISを主成果物として保存します。旧Rustの検査・相互試験は手動起動の別ワークフローへ分離しています。パッケージのSHA-256は整合性確認用であり、コード署名や会社の配布承認の代替ではありません。
 
 0.4.3までのSurface全体試験結果を保持し、0.4.4以降はSurfaceで再試験しません。最初は会社FAQへ接続しない検証用Windows利用者と合成FAQを使用します。2026-08-16付で、一人利用試行では対象コミット、起動、利用者データ分離、通常・緊急認証、ローカルバックアップ・復元、Git混入防止を最低確認とし、正式配布向けの追加確認は延期しました。0.3.3～0.4.3の実機・診断文書は過去候補の履歴として保持します。
 
