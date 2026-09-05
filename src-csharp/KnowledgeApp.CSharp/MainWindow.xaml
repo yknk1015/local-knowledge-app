@@ -1,0 +1,29 @@
+<Window x:Class="KnowledgeApp.CSharp.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+        Title="KnowledgeApp C# — 検証用"
+        Width="1280"
+        Height="800"
+        MinWidth="960"
+        MinHeight="640"
+        WindowStartupLocation="CenterScreen">
+    <DockPanel>
+        <Border x:Name="ModeBanner" DockPanel.Dock="Top" Background="#FFF4D6" BorderBrush="#D9A928" BorderThickness="0,0,0,1" Padding="14,9">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="ModeLabel" Grid.Column="0" VerticalAlignment="Center" FontWeight="Bold" Foreground="#5F4500" Text="C#検証用 — 本番とは別のデータ" />
+                <TextBlock x:Name="ModeDescription" Grid.Column="1" Margin="12,0" VerticalAlignment="Center" TextWrapping="Wrap" Foreground="#5F4500" Text="検証データは再起動後も保持します。本番へ自動反映しません。この検証画面のCodex依頼文は送信しないでください。" />
+                <Button Grid.Column="2" Padding="12,4" Content="メール履歴を確認" Click="OpenMailImport_Click" />
+            </Grid>
+        </Border>
+        <Border DockPanel.Dock="Bottom" Background="#F5F7F8" BorderBrush="#D7DEE2" BorderThickness="0,1,0,0" Padding="10,7">
+            <TextBlock x:Name="StatusText" Foreground="#44525A" Text="C#互換ホストを初期化しています…" />
+        </Border>
+        <wv2:WebView2 x:Name="Browser" />
+    </DockPanel>
+</Window>

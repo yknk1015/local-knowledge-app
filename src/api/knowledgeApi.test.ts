@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { toAppError } from "./knowledgeApi";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { knowledgeApi, toAppError } from "./knowledgeApi";
+
+const mocks = vi.hoisted(() => ({ invoke: vi.fn(), invokeCSharp: vi.fn(), hasCSharpBridge: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
+vi.mock("./csharpBridge", () => ({ invokeCSharp: mocks.invokeCSharp, hasCSharpBridge: mocks.hasCSharpBridge }));
 
 describe("toAppError", () => {
   it("keeps a structured application error", () => {
@@ -34,5 +38,43 @@ describe("toAppError", () => {
 
     expect(result.code).toBe("SYS-001");
     expect(result.message).not.toContain("stack");
+  });
+});
+
+describe("backup confirmation transport", () => {
+  beforeEach(() => { vi.clearAllMocks(); window.location.hash = "/settings"; });
+
+  it("sends the opaque confirmation only inside the typed C# restore input", async () => {
+    mocks.hasCSharpBridge.mockReturnValue(true);
+    mocks.invokeCSharp.mockResolvedValue({ sourcePath: "C:\\synthetic\\saved.faqbackup" });
+    await knowledgeApi.restoreBackup("C:\\synthetic\\saved.faqbackup", "synthetic-opaque-token");
+    expect(mocks.invokeCSharp).toHaveBeenCalledWith("restore_backup", {
+      input: { path: "C:\\synthetic\\saved.faqbackup", confirmationToken: "synthetic-opaque-token" },
+    });
+    expect(mocks.invoke).not.toHaveBeenCalled();
+    expect(window.location.hash).toBe("#/login");
+  });
+
+  it("preserves the Tauri path-only contract even when an optional token was supplied", async () => {
+    mocks.hasCSharpBridge.mockReturnValue(false);
+    mocks.invoke.mockResolvedValue({ sourcePath: "C:\\synthetic\\saved.faqbackup" });
+    await knowledgeApi.restoreBackup("C:\\synthetic\\saved.faqbackup", "never-send-to-tauri");
+    expect(mocks.invoke).toHaveBeenCalledWith("restore_backup", { path: "C:\\synthetic\\saved.faqbackup" });
+    expect(mocks.invokeCSharp).not.toHaveBeenCalled();
+  });
+
+  it("does not expire the login or navigate after C# refuses a stale confirmation", async () => {
+    mocks.hasCSharpBridge.mockReturnValue(true);
+    const problem = { code: "BK-011", message: "確認が無効です。", action: "選び直してください。" };
+    mocks.invokeCSharp.mockRejectedValue(problem);
+    const expired = vi.fn(); window.addEventListener("knowledge-auth-expired", expired);
+    try {
+      await expect(knowledgeApi.restoreBackup("C:\\synthetic\\saved.faqbackup")).rejects.toEqual(problem);
+      expect(mocks.invokeCSharp).toHaveBeenCalledWith("restore_backup", {
+        input: { path: "C:\\synthetic\\saved.faqbackup", confirmationToken: null },
+      });
+      expect(expired).not.toHaveBeenCalled();
+      expect(window.location.hash).toBe("#/settings");
+    } finally { window.removeEventListener("knowledge-auth-expired", expired); }
   });
 });

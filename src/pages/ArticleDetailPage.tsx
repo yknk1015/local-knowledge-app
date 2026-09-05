@@ -6,6 +6,12 @@ import { RichTextViewer } from "../components/RichTextEditor";
 import { StatusBadge } from "../components/StatusBadge";
 import { ArticleDisplayBadges } from "../components/ArticleDisplayBadges";
 import type { AppError, Article, CodexDelegationResult } from "../types/domain";
+import {
+  faqArticleScrollKey,
+  FaqArticleLink,
+  useFaqViewScrollPosition,
+  useOptionalFaqTabs,
+} from "../app/FaqTabs";
 
 function DetailValueList({ title, values }: { title: string; values: string[] }) {
   if (values.length === 0) return null;
@@ -29,6 +35,7 @@ export function ArticleDetailPage() {
   const { articleId = "" } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
+  const openArticleTab = useOptionalFaqTabs()?.openArticleTab;
   const locationState = location.state as { returnTo?: unknown; notice?: unknown; sourceSearchLogId?: unknown } | null;
   const returnTo = typeof locationState?.returnTo === "string"
     && /^\/search(?:\?|$)/.test(locationState.returnTo)
@@ -44,12 +51,20 @@ export function ArticleDetailPage() {
   const [actionBusy, setActionBusy] = useState(false);
   const [delegation, setDelegation] = useState<CodexDelegationResult | null>(null);
   const [notice, setNotice] = useState<string | null>(initialNotice);
+  useFaqViewScrollPosition(
+    faqArticleScrollKey(articleId),
+    !loading && article?.id === articleId,
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const loadedArticle = await knowledgeApi.getArticle(articleId);
+      if (openArticleTab && !openArticleTab(loadedArticle.id, loadedArticle.title)) {
+        navigate(returnTo, { replace: true });
+        return;
+      }
       setArticle(loadedArticle);
       await knowledgeApi.recordArticleView(articleId, sourceSearchLogId);
     } catch (caught) {
@@ -57,7 +72,7 @@ export function ArticleDetailPage() {
     } finally {
       setLoading(false);
     }
-  }, [articleId, sourceSearchLogId]);
+  }, [articleId, navigate, openArticleTab, returnTo, sourceSearchLogId]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -157,7 +172,7 @@ export function ArticleDetailPage() {
           <p>このFAQは通常の検索には表示されません。内容と添付画像は保持されており、元の分類と状態へ復元できます。</p>
           {article.mergeInfo && (
             <p>
-              統合先：<Link to={`/articles/${article.mergeInfo.targetArticleId}`}>{article.mergeInfo.targetArticleTitle}</Link>
+              統合先：<FaqArticleLink articleId={article.mergeInfo.targetArticleId} articleTitle={article.mergeInfo.targetArticleTitle}>{article.mergeInfo.targetArticleTitle}</FaqArticleLink>
             </p>
           )}
           <dl>
@@ -217,7 +232,7 @@ export function ArticleDetailPage() {
         <section className="panel merged-article-notice" aria-label="統合済みFAQ">
           <span className="status-badge merged">統合済み</span>
           <p>
-            このFAQは「<Link to={`/articles/${article.mergeInfo.targetArticleId}`}>{article.mergeInfo.targetArticleTitle}</Link>」へ統合されています。
+            このFAQは「<FaqArticleLink articleId={article.mergeInfo.targetArticleId} articleTitle={article.mergeInfo.targetArticleTitle}>{article.mergeInfo.targetArticleTitle}</FaqArticleLink>」へ統合されています。
             通常の検索結果には表示されません。
           </p>
         </section>
@@ -274,10 +289,10 @@ export function ArticleDetailPage() {
           <ul>
             {article.relatedArticles.map((related) => (
               <li key={related.id}>
-                <Link to={`/articles/${related.id}`}>
+                <FaqArticleLink articleId={related.id} articleTitle={related.title}>
                   <span>{related.title}</span>
                   <small>{relatedStatus(related)}</small>
-                </Link>
+                </FaqArticleLink>
               </li>
             ))}
           </ul>

@@ -1,12 +1,18 @@
 # KnowledgeApp Codex提案形式 第2版
 
+## C#正式版の受け渡し先
+
+通常のコマンドは、Windowsの既知フォルダーから解決した`%LOCALAPPDATA%\jp.local.webknowledgesystem.csharp`配下だけを扱う。分類カタログは`codex-bridge/categories.json`、FAQ委譲は`codex-bridge/delegations/{delegationId}.knowledge-delegation.json`、メール委譲は`codex-bridge/mail-delegations/{delegationId}.knowledge-mail-delegation.json`、確認待ち提案は`codex-inbox/{requestId}.knowledge-proposal.json`である。旧Tauri版・試作検証環境へのフォールバック、フォルダー探索、未処理ファイルの自動移行は行わない。旧版の委譲番号はC#版で再発行する。
+
+提案1MiB、FAQ委譲5MiB、メール委譲1MiB、Codex JSON全体127コンテナの制限を維持する。FAQ委譲取得・提案送信コマンドはFAQの更新日時と本文文字列を変換せず、元のJSONを保つ。アプリの厳格な形式検査と、利用者の確認・承認前にFAQを変更しない境界は保存先の変更後も同じである。
+
 ## 共通形式
 
 ```json
 {
   "formatVersion": 2,
   "requestId": "新しいUUID",
-  "seriesId": "新規はrequestIdと同じ値、修正・統合は委譲番号",
+  "seriesId": "通常の新規はrequestIdと同じ値、メール由来の新規・修正・統合は委譲番号",
   "createdAt": "RFC 3339日時",
   "proposalKind": "create | revise | merge",
   "sourceArticles": [
@@ -35,6 +41,8 @@
 | `merge` | 委譲元2～10件 | 最大3件の既存候補または新規案1件 | 元FAQを残して新しい下書き |
 
 既存分類候補は次の形式にする。
+
+メール委譲からの`create`は`sourceArticles`を空にし、`seriesId`へメール委譲番号を設定する。メール原本のパス、ファイル名、添付、送信者・宛先一覧を提案形式へ追加しない。
 
 ```json
 {

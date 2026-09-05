@@ -21,7 +21,7 @@ if ($null -ne $config.bundle.externalBin -and @($config.bundle.externalBin).Coun
 }
 
 $serializedConfig = $config | ConvertTo-Json -Depth 100
-$blockedPattern = '(?i)(knowledge\.db|\.db-(wal|shm|journal)|\.faqbackup|\.knowledge-(export\.json|faq\.csv|proposal\.json|delegation\.json)|codex-inbox|codex-bridge|manuals[\\/])'
+$blockedPattern = '(?i)(knowledge\.db|\.db-(wal|shm|journal)|\.faqbackup|\.knowledge-(export\.json|faq\.csv|proposal\.json|delegation\.json|mail-delegation\.json)|\.(msg|pst)|codex-inbox|codex-bridge|manuals[\\/])'
 if ($serializedConfig -match $blockedPattern) {
     $violations.Add('Tauri配布設定に利用者データまたは外部資料の同梱指定があります。')
 }

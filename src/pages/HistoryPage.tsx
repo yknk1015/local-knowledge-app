@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { FaqArticleLink } from "../app/FaqTabs";
 import { knowledgeApi, toAppError } from "../api/knowledgeApi";
 import { EmptyState, ErrorState, LoadingState } from "../components/Feedback";
 import type { AppError, SearchLogPage, ViewLogPage } from "../types/domain";
@@ -180,7 +181,7 @@ export function HistoryPage() {
               <tbody>{viewPage?.items.map((item) => (
                 <tr key={item.id}>
                   <td data-label="閲覧日時">{displayDate(item.viewedAt)}</td>
-                  <td data-label="FAQ"><Link to={`/articles/${item.articleId}`}>{item.articleTitle}</Link></td>
+                  <td data-label="FAQ"><FaqArticleLink articleId={item.articleId} articleTitle={item.articleTitle}>{item.articleTitle}</FaqArticleLink></td>
                   <td data-label="元の検索文">{item.sourceQueryText || "検索結果以外から閲覧"}</td>
                 </tr>
               ))}</tbody>

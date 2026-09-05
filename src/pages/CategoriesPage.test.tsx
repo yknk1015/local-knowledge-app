@@ -76,4 +76,32 @@ describe("CategoriesPage", () => {
     await waitFor(() => expect(mocks.reorderCategory).toHaveBeenCalledWith("root-b", "up"));
     expect(await screen.findByText(/上へ移動しました/)).toBeVisible();
   });
+
+  it("hides parents that would create a sixth level or a cycle", async () => {
+    const constrainedCategories = [
+      { id: "level-1", parentId: null, name: "階層1", description: "", depth: 1, sortOrder: 0, articleCount: 0 },
+      { id: "level-2", parentId: "level-1", name: "階層2", description: "", depth: 2, sortOrder: 0, articleCount: 0 },
+      { id: "level-3", parentId: "level-2", name: "階層3", description: "", depth: 3, sortOrder: 0, articleCount: 0 },
+      { id: "level-4", parentId: "level-3", name: "階層4", description: "", depth: 4, sortOrder: 0, articleCount: 0 },
+      { id: "level-5", parentId: "level-4", name: "階層5", description: "", depth: 5, sortOrder: 0, articleCount: 0 },
+      { id: "safe-root", parentId: null, name: "安全な移動先", description: "", depth: 1, sortOrder: 1, articleCount: 0 },
+    ];
+    mocks.listCategories.mockResolvedValue(constrainedCategories);
+    render(<CategoriesPage />);
+
+    await screen.findAllByText("階層5");
+    const createParent = screen.getByLabelText("親となる分類") as HTMLSelectElement;
+    expect([...createParent.options].map((option) => option.value)).not.toContain("level-5");
+    expect([...createParent.options].map((option) => option.value)).toContain("level-4");
+
+    fireEvent.click(screen.getAllByRole("button", { name: "編集" })[1]!);
+    const moveParent = screen.getByLabelText("移動先") as HTMLSelectElement;
+    const moveValues = [...moveParent.options].map((option) => option.value);
+    expect(moveValues).not.toContain("level-2");
+    expect(moveValues).not.toContain("level-3");
+    expect(moveValues).not.toContain("level-4");
+    expect(moveValues).not.toContain("level-5");
+    expect(moveValues).toContain("level-1");
+    expect(moveValues).toContain("safe-root");
+  });
 });

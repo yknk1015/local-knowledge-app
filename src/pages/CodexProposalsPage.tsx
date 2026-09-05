@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { knowledgeApi, toAppError } from "../api/knowledgeApi";
 import { EmptyState, ErrorState, LoadingState } from "../components/Feedback";
 import { RichTextViewer } from "../components/RichTextEditor";
+import { FaqArticleLink } from "../app/FaqTabs";
 import type {
   AppError,
   Article,
@@ -273,7 +274,7 @@ export function CodexProposalsPage() {
             {selected.proposalKind === "merge" && (
               <div className="panel codex-source-list">
                 <div className="panel-heading"><h2>統合元FAQ</h2><span>元FAQは変更しません</span></div>
-                <ul>{sourceArticles.map((article) => <li key={article.id}><Link to={`/articles/${article.id}`}>{article.title}</Link></li>)}</ul>
+                <ul>{sourceArticles.map((article) => <li key={article.id}><FaqArticleLink articleId={article.id} articleTitle={article.title}>{article.title}</FaqArticleLink></li>)}</ul>
               </div>
             )}
 
@@ -334,7 +335,7 @@ export function CodexProposalsPage() {
             ) : selectedHistory && (
               <div className="codex-review-actions history-actions">
                 <span>{selectedHistory.status === "accepted" ? "この提案は承認済みです。" : selectedHistory.canReopen ? "この依頼系列の最新の却下案です。" : "同じ依頼に新しい案があるため閲覧専用です。"}</span>
-                {selectedHistory.acceptedArticleId && <Link className="button secondary" to={`/articles/${selectedHistory.acceptedArticleId}`}>反映先FAQを開く</Link>}
+                {selectedHistory.acceptedArticleId && <FaqArticleLink className="button secondary" articleId={selectedHistory.acceptedArticleId} articleTitle={selectedHistory.proposal.faq.title}>反映先FAQを開く</FaqArticleLink>}
                 {selectedHistory.status === "rejected" && <button type="button" className="button primary" disabled={busy || !selectedHistory.canReopen} onClick={() => void reopen(selectedHistory)}>再検討へ戻す</button>}
               </div>
             )}

@@ -14,6 +14,7 @@ import {
 import StarterKit from "@tiptap/starter-kit";
 import { TableKit } from "@tiptap/extension-table";
 import { knowledgeApi, toAppError } from "../api/knowledgeApi";
+import { hasCSharpBridge } from "../api/csharpBridge";
 import "./RichTextEditor.css";
 
 const EMPTY_DOCUMENT: JSONContent = {
@@ -25,6 +26,23 @@ export interface ManagedImageSource {
   id: string;
   assetPath: string;
   altText: string;
+}
+
+const CSHARP_MANAGED_IMAGE_URL = /^https:\/\/knowledge-(?:attachments|staged)\.local\//;
+
+export function toManagedImageDisplayUrl(assetPath: string): string {
+  return CSHARP_MANAGED_IMAGE_URL.test(assetPath) ? assetPath : convertFileSrc(assetPath);
+}
+
+export function findClipboardImageFile(
+  clipboardData: Pick<DataTransfer, "files" | "items"> | null,
+): File | undefined {
+  if (!clipboardData) return undefined;
+  const file = Array.from(clipboardData.files).find((item) => item.type.startsWith("image/"));
+  if (file) return file;
+  return Array.from(clipboardData.items)
+    .find((item) => item.kind === "file" && item.type.startsWith("image/"))
+    ?.getAsFile() ?? undefined;
 }
 
 const ManagedImage = Image.extend({
@@ -58,6 +76,10 @@ const ManagedImage = Image.extend({
 const MAX_COPY_BLOCK_LENGTH = 4_000;
 
 async function writePlainTextToClipboard(text: string): Promise<void> {
+  if (hasCSharpBridge()) {
+    await knowledgeApi.writeClipboardText(text);
+    return;
+  }
   if (isTauri()) {
     await writeText(text);
     return;
@@ -242,7 +264,8 @@ export function hydrateManagedImages(
   return transformImages(value, (attributes) => {
     const id = typeof attributes.attachmentId === "string" ? attributes.attachmentId : "";
     const path = paths.get(id);
-    return path ? { ...attributes, src: convertFileSrc(path) } : attributes;
+    const source = path ? toManagedImageDisplayUrl(path) : null;
+    return source ? { ...attributes, src: source } : attributes;
   });
 }
 
@@ -322,7 +345,7 @@ export function RichTextEditor({
       .insertContent({
         type: "image",
         attrs: {
-          src: convertFileSrc(image.assetPath),
+          src: toManagedImageDisplayUrl(image.assetPath),
           alt: altText,
           title: null,
           attachmentId: image.id,
@@ -345,9 +368,7 @@ export function RichTextEditor({
       },
       transformPastedHTML: stripLinksFromPastedHtml,
       handlePaste: (_view, event) => {
-        const imageFile = Array.from(event.clipboardData?.files ?? []).find((file) =>
-          file.type.startsWith("image/"),
-        );
+        const imageFile = findClipboardImageFile(event.clipboardData);
         if (!imageFile || !imageRequestRef.current) return false;
         void insertImage(imageFile);
         return true;

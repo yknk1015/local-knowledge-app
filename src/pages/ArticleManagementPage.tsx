@@ -1,10 +1,11 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { save } from "@tauri-apps/plugin-dialog";
 import { knowledgeApi, toAppError } from "../api/knowledgeApi";
+import { selectFaqCsvExportPath } from "../api/transferDialogs";
 import { EmptyState, ErrorState, LoadingState } from "../components/Feedback";
 import { StatusBadge } from "../components/StatusBadge";
 import { ArticleDisplayBadges } from "../components/ArticleDisplayBadges";
+import { FaqArticleLink } from "../app/FaqTabs";
 import type {
   AppError,
   ArticleStatus,
@@ -91,10 +92,7 @@ export function ArticleManagementPage() {
   const exportCsv = async () => {
     const today = new Date();
     const stamp = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, "0")}${String(today.getDate()).padStart(2, "0")}`;
-    const destination = await save({
-      defaultPath: `KnowledgeApp_FAQ_${stamp}.knowledge-faq.csv`,
-      filters: [{ name: "KnowledgeApp FAQ CSV", extensions: ["csv"] }],
-    });
+    const destination = await selectFaqCsvExportPath(`KnowledgeApp_FAQ_${stamp}.knowledge-faq.csv`);
     if (!destination) return;
     const normalized = destination.toLowerCase().endsWith(".knowledge-faq.csv")
       ? destination
@@ -339,11 +337,11 @@ export function ArticleManagementPage() {
                     </td>
                   )}
                   <td className="management-faq-cell" data-label="FAQ">
-                    <Link to={`/articles/${article.id}`}>{article.title}</Link>
+                    <FaqArticleLink articleId={article.id} articleTitle={article.title}>{article.title}</FaqArticleLink>
                     {article.summary && <small>{article.summary}</small>}
                     {article.mergeInfo && (
                       <small className="management-merge-target">
-                        統合先：<Link to={`/articles/${article.mergeInfo.targetArticleId}`}>{article.mergeInfo.targetArticleTitle}</Link>
+                        統合先：<FaqArticleLink articleId={article.mergeInfo.targetArticleId} articleTitle={article.mergeInfo.targetArticleTitle}>{article.mergeInfo.targetArticleTitle}</FaqArticleLink>
                       </small>
                     )}
                   </td>

@@ -34,12 +34,28 @@ pub fn run() {
             let app_data_dir = app.path().app_local_data_dir().map_err(|_| {
                 errors::AppError::system("利用者データの保存先を取得できませんでした。")
             })?;
+            // A previous C# process may have exited between DB and managed-file
+            // restoration. Do not initialize, clean staging files or open SQLite
+            // until that fixed-root recovery has completed in the C# host.
+            if let Err(error) =
+                services::csharp_recovery_guard::require_completed_recovery(&app_data_dir)
+            {
+                app.dialog()
+                    .message(format!("{}\n\n対処: {}", error.message, error.action))
+                    .title("KnowledgeAppを起動できません")
+                    .kind(MessageDialogKind::Error)
+                    .blocking_show();
+                return Err(error.into());
+            }
             let forbidden_roots = forbidden_roots(app);
             let data_root = DataRootService::initialize(app_data_dir, &forbidden_roots)?;
             services::attachments::cleanup_stale_stages(&data_root);
-            let database = match (|| {
+            let database = match (|| -> errors::AppResult<Database> {
                 services::backup::create_pre_migration_backup_if_needed(&data_root)?;
-                Database::open(&data_root.database_path())
+                let database = Database::open(&data_root.database_path())?;
+                // Recheck after any SQLite wait before exposing data to the UI.
+                services::csharp_recovery_guard::require_completed_recovery(data_root.root())?;
+                Ok(database)
             })() {
                 Ok(database) => database,
                 Err(error) => {

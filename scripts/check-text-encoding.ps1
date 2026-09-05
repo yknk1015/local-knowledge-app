@@ -14,9 +14,9 @@ else {
 $strictUtf8 = [Text.UTF8Encoding]::new($false, $true)
 $gitOutputEncoding = [Text.UTF8Encoding]::new($false)
 $textExtensions = @(
-    '.c', '.cc', '.cpp', '.css', '.csv', '.h', '.html', '.ini', '.js', '.json',
-    '.jsx', '.md', '.ps1', '.rs', '.sh', '.sql', '.svg', '.toml', '.ts', '.tsx',
-    '.txt', '.xml', '.yaml', '.yml'
+    '.c', '.cc', '.cpp', '.cs', '.csproj', '.css', '.csv', '.h', '.html', '.ini', '.js', '.json',
+    '.jsx', '.md', '.mjs', '.ps1', '.rs', '.sh', '.sql', '.svg', '.toml', '.ts', '.tsx',
+    '.txt', '.xaml', '.xml', '.yaml', '.yml', '.nsi', '.nsh'
 )
 $textFileNames = @(
     '.editorconfig', '.gitattributes', '.gitignore', 'Cargo.lock', 'package-lock.json',

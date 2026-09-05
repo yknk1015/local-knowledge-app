@@ -22,6 +22,13 @@ const mocks = vi.hoisted(() => ({
   restoreBackup: vi.fn(),
   getSettings: vi.fn(),
   saveSettings: vi.fn(),
+  hasCSharpBridge: vi.fn(),
+  invokeCSharp: vi.fn(),
+}));
+
+vi.mock("../api/csharpBridge", () => ({
+  hasCSharpBridge: mocks.hasCSharpBridge,
+  invokeCSharp: mocks.invokeCSharp,
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
@@ -62,6 +69,7 @@ function renderPage() {
 describe("SettingsPage backup operations", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.hasCSharpBridge.mockReturnValue(false);
     Object.assign(mocks.currentUser, {
       id: "initial-admin",
       loginId: "0000",
@@ -87,6 +95,28 @@ describe("SettingsPage backup operations", () => {
     mocks.getSettings.mockResolvedValue({ colorTheme: "green", showTopCategoryInTitle: true, showMascot: true });
     mocks.saveSettings.mockImplementation(async (settings) => settings);
     document.documentElement.dataset.colorTheme = "green";
+  });
+
+  it.each([1, 5, 6])("shows schema %i migration information before the C# restore confirmation", async (version) => {
+    mocks.hasCSharpBridge.mockReturnValue(true);
+    mocks.invokeCSharp.mockResolvedValue("C:\\synthetic\\legacy.faqbackup");
+    mocks.inspectBackup.mockResolvedValue({
+      sourcePath: "C:\\synthetic\\legacy.faqbackup", displayName: "合成旧版", createdAt: "2026-09-05T00:00:00Z",
+      appVersion: "synthetic-legacy", schemaVersion: version, backupFormatVersion: 1, totalBytes: 4096,
+      counts: { articles: 1, categories: 1, attachments: 0, manuals: 0 },
+    });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    try {
+      renderPage();
+      fireEvent.click(await screen.findByRole("button", { name: "バックアップから復元" }));
+      const note = await screen.findByRole("note", { name: "旧版バックアップの移行" });
+      expect(note).toHaveTextContent(`DB第${version}版を第7版へ移行して復元します。`);
+      expect(note).toHaveTextContent("元のバックアップは変更しません。");
+      expect(note).toHaveTextContent(version < 6 ? "利用者機能がない旧版" : "既存の利用者・パスワードを引き継ぎます");
+      fireEvent.click(screen.getByRole("button", { name: "この内容を復元" }));
+      expect(confirm).toHaveBeenCalledWith(expect.stringContaining(note.textContent ?? "missing notice"));
+      expect(mocks.restoreBackup).not.toHaveBeenCalled();
+    } finally { confirm.mockRestore(); }
   });
 
   it("applies and persists the blue color theme", async () => {
@@ -249,5 +279,33 @@ describe("SettingsPage backup operations", () => {
 
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("BK-006"));
     expect(screen.getByRole("alert")).toHaveTextContent("破損しています");
+  });
+
+  it.each(["BK-011", "BK-006"])("clears a consumed C# confirmation after %s and requires fresh selection", async (code) => {
+    mocks.hasCSharpBridge.mockReturnValue(true);
+    mocks.invokeCSharp.mockResolvedValue("C:\\synthetic\\selected.faqbackup");
+    const preview = {
+      sourcePath: "C:\\synthetic\\selected.faqbackup", displayName: "合成確認対象", createdAt: "2026-09-05T00:00:00Z",
+      appVersion: "synthetic", schemaVersion: 7, backupFormatVersion: 1, totalBytes: 4096,
+      counts: { articles: 1, categories: 1, attachments: 0, manuals: 0 }, confirmationToken: "first-opaque-token",
+    };
+    mocks.inspectBackup.mockResolvedValueOnce(preview).mockResolvedValueOnce({ ...preview, confirmationToken: "fresh-opaque-token" });
+    mocks.restoreBackup.mockRejectedValueOnce({ code, message: "確認が無効です。現在のデータは変更していません。", action: "バックアップを選び直してください。" })
+      .mockResolvedValueOnce({ sourcePath: preview.sourcePath, safetyBackupPath: "C:\\synthetic\\safety.faqbackup", counts: preview.counts });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    try {
+      renderPage();
+      fireEvent.click(await screen.findByRole("button", { name: "バックアップから復元" }));
+      const restore = await screen.findByRole("button", { name: "この内容を復元" });
+      expect(screen.getByRole("note", { name: "復元確認の有効期限" })).toHaveTextContent("10分間");
+      fireEvent.click(restore);
+      await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(code));
+      expect(mocks.restoreBackup).toHaveBeenNthCalledWith(1, preview.sourcePath, "first-opaque-token");
+      expect(screen.queryByRole("button", { name: "この内容を復元" })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "バックアップから復元" }));
+      fireEvent.click(await screen.findByRole("button", { name: "この内容を復元" }));
+      await waitFor(() => expect(mocks.restoreBackup).toHaveBeenNthCalledWith(2, preview.sourcePath, "fresh-opaque-token"));
+      expect(await screen.findByText("バックアップから復元しました")).toBeInTheDocument();
+    } finally { confirm.mockRestore(); }
   });
 });

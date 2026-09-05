@@ -7,6 +7,10 @@
 # Rust / Tauri build outputs
 /src-tauri/target/
 
+# C# migration build outputs
+/src-csharp/**/bin/
+/src-csharp/**/obj/
+
 # Generated icon variants not used by the Windows build
 /src-tauri/icons/android/
 /src-tauri/icons/ios/
@@ -35,6 +39,14 @@
 /tmp/
 /codex-inbox/
 /codex-bridge/
+jp.local.webknowledgesystem.csharp-rehearsal/
+jp.local.webknowledgesystem.csharp/
+.knowledgeapp-rehearsal-initializing
+.knowledgeapp-rehearsal-initialized
+.knowledgeapp-csharp-initializing
+.knowledgeapp-csharp-initialized
+restore-pending.json
+.knowledgeapp-installation-lock
 
 # Database files and journals
 *.db
@@ -51,6 +63,9 @@
 *.knowledge-faq.csv
 *.knowledge-proposal.json
 *.knowledge-delegation.json
+*.knowledge-mail-delegation.json
+*.msg
+*.pst
 *.partial
 
 # Local planning source

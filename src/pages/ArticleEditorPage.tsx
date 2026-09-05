@@ -8,6 +8,7 @@ import {
   useParams,
 } from "react-router-dom";
 import { knowledgeApi, toAppError } from "../api/knowledgeApi";
+import { hasCSharpBridge } from "../api/csharpBridge";
 import { ErrorState, LoadingState } from "../components/Feedback";
 import { RichTextEditor, type ManagedImageSource } from "../components/RichTextEditor";
 import type {
@@ -294,21 +295,23 @@ export function ArticleEditorPage() {
             file.name || "pasted-image",
             Array.from(new Uint8Array(await file.arrayBuffer())),
           )
-        : await (async () => {
-            const selected = await open({
-              multiple: false,
-              directory: false,
-              filters: [
-                {
-                  name: "画像（10MB以下）",
-                  extensions: ["png", "jpg", "jpeg", "webp", "gif"],
-                },
-              ],
-            });
-            return typeof selected === "string"
-              ? knowledgeApi.stageArticleImage(selected)
-              : null;
-          })();
+        : hasCSharpBridge()
+          ? await knowledgeApi.selectArticleImage()
+          : await (async () => {
+              const selected = await open({
+                multiple: false,
+                directory: false,
+                filters: [
+                  {
+                    name: "画像（10MB以下）",
+                    extensions: ["png", "jpg", "jpeg", "webp", "gif"],
+                  },
+                ],
+              });
+              return typeof selected === "string"
+                ? knowledgeApi.stageArticleImage(selected)
+                : null;
+            })();
       if (!staged) return null;
       const source = {
         id: staged.id,

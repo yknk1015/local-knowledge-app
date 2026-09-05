@@ -5,6 +5,7 @@ import { useDisplaySettings } from "../app/ColorTheme";
 import { EmptyState, ErrorState, LoadingState } from "../components/Feedback";
 import { StatusBadge } from "../components/StatusBadge";
 import { ArticleDisplayBadges } from "../components/ArticleDisplayBadges";
+import { FAQ_SEARCH_SCROLL_KEY, FaqArticleLink, useFaqViewScrollPosition } from "../app/FaqTabs";
 import type { AppError, ArticleListItem, Category, SearchArticlePage, SearchScope, SearchSort } from "../types/domain";
 
 function SearchIcon() {
@@ -151,6 +152,7 @@ export function SearchPage() {
   const [currentSearchLogId, setCurrentSearchLogId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<AppError | null>(null);
+  useFaqViewScrollPosition(FAQ_SEARCH_SCROLL_KEY, !loading);
   const categoryById = useMemo(
     () => new Map(categories.map((category) => [category.id, category])),
     [categories],
@@ -577,8 +579,9 @@ export function SearchPage() {
               <div className="article-list" role="list" aria-label="FAQ検索結果">
                 {articles.map((article) => (
                   <article key={article.id} className="article-card" role="listitem">
-                    <Link
-                      to={`/articles/${article.id}`}
+                    <FaqArticleLink
+                      articleId={article.id}
+                      articleTitle={article.title}
                       state={{ returnTo, sourceSearchLogId: currentSearchLogId }}
                       className="article-card-link"
                       onClick={rememberSearchPosition}
@@ -616,7 +619,7 @@ export function SearchPage() {
                         </span>
                         <span className="card-open-mark" aria-hidden="true">›</span>
                       </div>
-                    </Link>
+                    </FaqArticleLink>
                   </article>
                 ))}
               </div>

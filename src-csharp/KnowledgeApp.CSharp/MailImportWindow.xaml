@@ -1,0 +1,94 @@
+<Window x:Class="KnowledgeApp.CSharp.MailImportWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="メール履歴からFAQ候補を作る"
+        Width="1180"
+        Height="760"
+        MinWidth="960"
+        MinHeight="620"
+        WindowStartupLocation="CenterOwner">
+    <DockPanel Margin="18">
+        <StackPanel DockPanel.Dock="Top">
+            <TextBlock FontSize="22" FontWeight="Bold" Text="メール履歴からFAQ候補を作る" />
+            <TextBlock Margin="0,8,0,0" TextWrapping="Wrap" Foreground="#5F4500" FontWeight="Bold" Text="C#専用の検証環境です。委譲は本番と別のフォルダーに保持します。実Codexプラグインへ送信しないでください（依頼文のコピーは行いません）。" />
+            <Border Margin="0,10,0,12" Padding="12" Background="#FFF6DD" BorderBrush="#E0BD5A" BorderThickness="1" CornerRadius="8">
+                <TextBlock TextWrapping="Wrap" Text="この画面で「② .msgを確認」を押したときだけ、選んだフォルダ直下の.msgを1回読み取ります。自動監視はしません。.pstと添付ファイルは読み取りません。委譲前に個人情報・機密情報・認証情報を削除またはマスクしてください。" />
+            </Border>
+            <Grid Margin="0,0,0,12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBox x:Name="FolderText" IsReadOnly="True" MinHeight="34" VerticalContentAlignment="Center" />
+                <Button Grid.Column="1" Margin="8,0,0,0" Padding="14,6" Content="① フォルダを選択" Click="ChooseFolder_Click" />
+                <Button x:Name="ScanButton"
+                        Grid.Column="2"
+                        Margin="8,0,0,0"
+                        Padding="14,6"
+                        IsEnabled="False"
+                        FontWeight="Bold"
+                        Content="② .msgを確認"
+                        Click="Scan_Click" />
+            </Grid>
+        </StackPanel>
+
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="5*" />
+                <ColumnDefinition Width="6*" />
+            </Grid.ColumnDefinitions>
+
+            <DataGrid x:Name="MailGrid"
+                      Grid.Row="0"
+                      Grid.Column="0"
+                      Margin="0,0,10,0"
+                      AutoGenerateColumns="False"
+                      CanUserAddRows="False"
+                      SelectionMode="Single"
+                      SelectionUnit="FullRow">
+                <DataGrid.Columns>
+                    <DataGridCheckBoxColumn Header="使用" Width="48" Binding="{Binding IsSelected, UpdateSourceTrigger=PropertyChanged}" />
+                    <DataGridTextColumn Header="日時" Width="125" IsReadOnly="True" Binding="{Binding SentAt, StringFormat={}{0:yyyy/MM/dd HH:mm}}" />
+                    <DataGridTextColumn Header="送信者" Width="130" IsReadOnly="True" Binding="{Binding Sender}" />
+                    <DataGridTextColumn Header="件名" Width="*" IsReadOnly="True" Binding="{Binding Subject}" />
+                </DataGrid.Columns>
+            </DataGrid>
+
+            <ScrollViewer Grid.Row="0" Grid.Column="1" VerticalScrollBarVisibility="Auto">
+                <StackPanel DataContext="{Binding SelectedItem, ElementName=MailGrid}">
+                    <TextBlock FontSize="16" FontWeight="Bold" Text="選択メールの確認・マスク" />
+                    <TextBlock Margin="0,5,0,12" Foreground="#5B6670" TextWrapping="Wrap" Text="右側の内容だけが委譲候補です。不要な氏名、アドレス、会社情報、認証情報を直接削除または伏字にしてください。原本は変更しません。" />
+                    <TextBlock FontWeight="Bold" Text="元ファイル名（委譲しません）" />
+                    <TextBlock Margin="0,3,0,8" Text="{Binding SourceFileName}" />
+                    <TextBlock FontWeight="Bold" Text="件名" />
+                    <TextBox Margin="0,3,0,8" Text="{Binding Subject, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBlock FontWeight="Bold" Text="送信者" />
+                    <TextBox Margin="0,3,0,8" Text="{Binding Sender, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBlock FontWeight="Bold" Text="宛先" />
+                    <TextBox Margin="0,3,0,8" Text="{Binding Recipients, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBlock FontWeight="Bold" Text="本文" />
+                    <TextBox Margin="0,3,0,0"
+                             MinHeight="320"
+                             AcceptsReturn="True"
+                             AcceptsTab="True"
+                             TextWrapping="Wrap"
+                             VerticalScrollBarVisibility="Auto"
+                             Text="{Binding BodyText, UpdateSourceTrigger=PropertyChanged}" />
+                </StackPanel>
+            </ScrollViewer>
+
+            <DockPanel Grid.Row="1" Grid.ColumnSpan="2" Margin="0,14,0,0">
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                    <Button x:Name="DiscardDelegationButton" IsEnabled="False" Margin="0,0,8,0" Padding="14,8" Content="作成した委譲を破棄" Click="DiscardDelegation_Click" />
+                    <Button Padding="18,8" FontWeight="Bold" Content="選択したメールをCodexへ委譲" Click="Delegate_Click" />
+                </StackPanel>
+                <TextBlock x:Name="MailStatusText" VerticalAlignment="Center" TextWrapping="Wrap" Text="①フォルダを選択し、②「.msgを確認」を押してください。フォルダを選んだだけでは読み取りません。" />
+            </DockPanel>
+        </Grid>
+    </DockPanel>
+</Window>

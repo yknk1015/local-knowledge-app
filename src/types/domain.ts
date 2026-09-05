@@ -408,6 +408,7 @@ export interface BackupPreview {
   backupFormatVersion: number;
   totalBytes: number;
   counts: BackupCounts;
+  confirmationToken?: string | null;
 }
 
 export interface BackupResult {

@@ -1,18 +1,18 @@
 {
   "name": "knowledgeapp-faq",
-  "version": "0.2.2",
-  "description": "KnowledgeApp向けの新規FAQ、既存FAQの修正、複数FAQの統合案を確認待ち提案として作成します。",
+  "version": "0.3.0",
+  "description": "KnowledgeApp向けの新規FAQ、既存FAQの修正、複数FAQの統合、明示委譲されたメール履歴のFAQ案を確認待ち提案として作成します。",
   "author": {
     "name": "KnowledgeApp contributors"
   },
   "skills": "./skills/",
   "interface": {
     "displayName": "KnowledgeApp FAQ支援",
-    "shortDescription": "FAQの新規作成・修正・統合案を確認待ちで送ります。",
-    "longDescription": "KnowledgeAppの分類カタログまたは利用者が明示的に作成した委譲情報を参照し、新規FAQ、既存FAQの修正、複数FAQの統合案を作成します。データベースは変更せず、利用者がアプリで確認した内容だけを反映します。",
+    "shortDescription": "FAQの新規・修正・統合・メール由来案を確認待ちで送ります。",
+    "longDescription": "KnowledgeAppの分類カタログまたは利用者が明示的に作成したFAQ・メール委譲情報を参照し、新規FAQ、既存FAQの修正、複数FAQの統合案を作成します。データベースやメール原本は変更せず、利用者がアプリで確認した内容だけを反映します。",
     "developerName": "KnowledgeApp contributors",
     "category": "Productivity",
-    "capabilities": ["FAQ draft", "FAQ revision", "FAQ merge", "Category suggestion"],
-    "defaultPrompt": "KnowledgeApp用のFAQ作成・修正・統合案を作成してください。"
+    "capabilities": ["FAQ draft", "FAQ revision", "FAQ merge", "Mail delegation to FAQ", "Category suggestion"],
+    "defaultPrompt": "KnowledgeApp用のFAQ作成・修正・統合・メール由来案を作成してください。"
   }
 }

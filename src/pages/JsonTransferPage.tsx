@@ -1,7 +1,7 @@
-import { open, save } from "@tauri-apps/plugin-dialog";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { knowledgeApi, toAppError } from "../api/knowledgeApi";
+import { selectJsonExportPath, selectJsonImportPath } from "../api/transferDialogs";
 import { ErrorState, LoadingState } from "../components/Feedback";
 import type {
   AppError,
@@ -44,11 +44,7 @@ export function JsonTransferPage() {
     setError(null);
     setExportResult(null);
     try {
-      const destination = await save({
-        title: "KnowledgeApp JSONの保存先を選択",
-        defaultPath: defaultJsonName(),
-        filters: [{ name: "KnowledgeApp JSON", extensions: ["json"] }],
-      });
+      const destination = await selectJsonExportPath(defaultJsonName());
       if (!destination) return;
       const normalized = destination.toLowerCase().endsWith(".knowledge-export.json")
         ? destination
@@ -67,12 +63,7 @@ export function JsonTransferPage() {
     setPreview(null);
     setImportResult(null);
     try {
-      const selected = await open({
-        title: "取り込むKnowledgeApp JSONを選択",
-        multiple: false,
-        directory: false,
-        filters: [{ name: "KnowledgeApp JSON", extensions: ["json"] }],
-      });
+      const selected = await selectJsonImportPath();
       if (!selected) return;
       setBusy("inspect");
       setPreview(await knowledgeApi.inspectJson(selected));

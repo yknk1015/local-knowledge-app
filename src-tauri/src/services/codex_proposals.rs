@@ -562,6 +562,10 @@ fn delegation_write_error() -> AppError {
 }
 
 #[cfg(test)]
+#[path = "codex_proposals_interop_tests.rs"]
+mod interop_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;

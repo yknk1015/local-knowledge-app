@@ -1,7 +1,7 @@
 interface:
   display_name: "KnowledgeApp FAQ Assistant"
-  short_description: "Draft, revise, and merge KnowledgeApp FAQs for review"
-  default_prompt: "Use $knowledgeapp-faq to draft, revise, or merge KnowledgeApp FAQs for review."
+  short_description: "Draft, revise, merge, and convert delegated mail into KnowledgeApp FAQs"
+  default_prompt: "Use $knowledgeapp-faq to draft, revise, merge, or convert an explicit mail delegation into a KnowledgeApp FAQ for review."
 
 policy:
   allow_implicit_invocation: true

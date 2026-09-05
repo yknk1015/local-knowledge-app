@@ -3,6 +3,7 @@ import { NavLink, Outlet } from "react-router-dom";
 import { FaqMascot } from "../components/FaqMascot";
 import { useDisplaySettings } from "./ColorTheme";
 import { useAuth } from "./AuthContext";
+import { FaqTabBar, FaqTabsProvider } from "./FaqTabs";
 
 type IconName = "search" | "plus" | "sparkles" | "list" | "folder" | "tag" | "settings" | "check" | "users" | "history";
 
@@ -35,7 +36,7 @@ function AppIcon({ name }: { name: IconName }) {
   return <svg viewBox="0 0 24 24" aria-hidden="true">{paths[name]}</svg>;
 }
 
-export function AppShell() {
+function AppShellContent() {
   const { showMascot, updateShowMascot } = useDisplaySettings();
   const { user, logout } = useAuth();
   const visibleNavItems = user?.role === "admin"
@@ -79,10 +80,19 @@ export function AppShell() {
         </nav>
 
         <main className="main-content">
+          <FaqTabBar />
           <Outlet />
         </main>
         <FaqMascot visible={showMascot} onRequestHide={() => updateShowMascot(false)} />
       </div>
     </div>
+  );
+}
+
+export function AppShell() {
+  return (
+    <FaqTabsProvider>
+      <AppShellContent />
+    </FaqTabsProvider>
   );
 }

@@ -27,10 +27,14 @@ $blockedRootNames = @(
     'safety-backups',
     'tmp',
     'codex-inbox',
-    'codex-bridge'
+    'codex-bridge',
+    'jp.local.webknowledgesystem.csharp'
 )
 $blockedRootPattern = '^(data|attachments|manuals|backup|backups|exports|logs|restore-staging|safety-backups|tmp|codex-inbox|codex-bridge)/'
-$blockedFilePattern = '(?i)(^|/)(knowledge\.db(?:-(?:wal|shm|journal))?|[^/]+\.(?:db|sqlite|sqlite3)(?:-(?:wal|shm|journal))?|[^/]+\.faqbackup(?:\.[^/]*)?|[^/]+\.knowledge-export\.json|[^/]+\.knowledge-faq\.csv|[^/]+\.knowledge-proposal\.json|[^/]+\.knowledge-delegation\.json|[^/]+\.partial)$'
+$blockedFilePattern = '(?i)(^|/)(knowledge\.db(?:-(?:wal|shm|journal))?|[^/]+\.(?:db|sqlite|sqlite3)(?:-(?:wal|shm|journal))?|[^/]+\.faqbackup(?:\.[^/]*)?|[^/]+\.knowledge-export\.json|[^/]+\.knowledge-faq\.csv|[^/]+\.knowledge-proposal\.json|[^/]+\.knowledge-delegation\.json|[^/]+\.knowledge-mail-delegation\.json|[^/]+\.(?:msg|pst)|[^/]+\.partial)$'
+$blockedFilePattern += '|(?i)(^|/)(\.?knowledgeapp-rehearsal-(?:initializing|initialized)|jp\.local\.webknowledgesystem\.csharp-rehearsal(?:/.*)?)$'
+$blockedFilePattern += '|(?i)(^|/)(\.knowledgeapp-csharp-(?:initializing|initialized)|restore-pending\.json|\.knowledgeapp-installation-lock)$'
+$blockedFilePattern += '|(?i)(^|/)jp\.local\.webknowledgesystem\.csharp(?:/.*)?$'
 $violations = [System.Collections.Generic.List[string]]::new()
 
 function Convert-ToRepositoryPath {

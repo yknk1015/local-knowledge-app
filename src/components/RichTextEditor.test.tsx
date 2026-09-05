@@ -2,11 +2,13 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   dehydrateManagedImages,
+  findClipboardImageFile,
   hydrateManagedImages,
   insertCopyBlockFromSelection,
   RichTextEditor,
   RichTextViewer,
   stripLinksFromPastedHtml,
+  toManagedImageDisplayUrl,
 } from "./RichTextEditor";
 import { knowledgeApi } from "../api/knowledgeApi";
 import type { Editor } from "@tiptap/core";
@@ -53,6 +55,12 @@ describe("stripLinksFromPastedHtml", () => {
 });
 
 describe("managed FAQ images", () => {
+  it("keeps the C# staged-image URL when inserting a newly selected image", () => {
+    const path = "https://knowledge-staged.local/018f0000-0000-7000-8000-000000000001.png";
+
+    expect(toManagedImageDisplayUrl(path)).toBe(path);
+  });
+
   it("uses a local asset URL only for display and keeps an attachment marker for saving", () => {
     const document = {
       type: "doc",
@@ -109,6 +117,26 @@ describe("managed FAQ images", () => {
     });
   });
 
+  it("keeps the C# virtual-host image URL without passing it through the Tauri converter", () => {
+    const id = "018f0000-0000-7000-8000-000000000001";
+    const document = {
+      type: "doc",
+      content: [{
+        type: "image",
+        attrs: { src: `knowledge-attachment:${id}`, alt: "設定画面", title: null, attachmentId: id },
+      }],
+    };
+    const hydrated = hydrateManagedImages(document, [{
+      id,
+      assetPath: `https://knowledge-attachments.local/${id}/${id}.png`,
+      altText: "設定画面",
+    }]);
+
+    expect(((hydrated.content as Array<Record<string, unknown>>)[0]!.attrs as Record<string, unknown>).src)
+      .toBe(`https://knowledge-attachments.local/${id}/${id}.png`);
+    expect(dehydrateManagedImages(hydrated)).toEqual(document);
+  });
+
   it("emits only the managed image attributes accepted by the Rust save boundary", async () => {
     const onChange = vi.fn();
     const onRequestImage = vi.fn().mockResolvedValue({
@@ -139,6 +167,47 @@ describe("managed FAQ images", () => {
       title: null,
       attachmentId: "018f0000-0000-7000-8000-000000000001",
     });
+  });
+
+  it("displays a newly selected C# staged image without converting its virtual-host URL", async () => {
+    const onRequestImage = vi.fn().mockResolvedValue({
+      id: "018f0000-0000-7000-8000-000000000001",
+      assetPath: "https://knowledge-staged.local/018f0000-0000-7000-8000-000000000001.png",
+      altText: "KnowledgeApp合成アイコン",
+    });
+    vi.spyOn(window, "prompt").mockReturnValue("KnowledgeApp合成アイコン");
+
+    render(
+      <RichTextEditor
+        value={{ type: "doc", content: [{ type: "paragraph" }] }}
+        onChange={vi.fn()}
+        onRequestImage={onRequestImage}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "画像" }));
+
+    const image = await screen.findByRole("img", { name: "KnowledgeApp合成アイコン" });
+    expect(image).toHaveAttribute(
+      "src",
+      "https://knowledge-staged.local/018f0000-0000-7000-8000-000000000001.png",
+    );
+  });
+
+  it("finds a Windows clipboard image exposed through clipboard items", () => {
+    const image = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], "image.png", {
+      type: "image/png",
+    });
+    const clipboardData = {
+      files: [] as unknown as FileList,
+      items: [{
+        kind: "file",
+        type: "image/png",
+        getAsFile: () => image,
+      }] as unknown as DataTransferItemList,
+    };
+
+    expect(findClipboardImageFile(clipboardData)).toBe(image);
   });
 });
 

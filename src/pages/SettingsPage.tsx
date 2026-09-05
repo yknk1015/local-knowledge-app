@@ -1,9 +1,11 @@
-import { open, save } from "@tauri-apps/plugin-dialog";
 import { useEffect, useRef, useState } from "react";
+import { selectFullBackupDestination, selectRestoreBackupSource } from "../api/backupDialogs";
+import { hasCSharpBridge } from "../api/csharpBridge";
 import { knowledgeApi, toAppError } from "../api/knowledgeApi";
 import { useAuth } from "../app/AuthContext";
 import { useDisplaySettings } from "../app/ColorTheme";
 import { ErrorState, LoadingState } from "../components/Feedback";
+import { legacyBackupNotice } from "../utils/legacyBackupNotice";
 import type {
   AppError,
   BackupOverview,
@@ -99,11 +101,7 @@ export function SettingsPage() {
       const defaultPath = overview?.defaultDirectory
         ? `${overview.defaultDirectory.replace(/[\\/]$/, "")}\\${name}`
         : name;
-      const destination = await save({
-        title: "フルバックアップの保存先と名前を選択",
-        defaultPath,
-        filters: [{ name: "KnowledgeAppフルバックアップ", extensions: ["faqbackup"] }],
-      });
+      const destination = await selectFullBackupDestination(defaultPath);
       if (!destination) return;
 
       setOperation("creating");
@@ -132,12 +130,7 @@ export function SettingsPage() {
     clearFeedback();
     setPreview(null);
     try {
-      const selected = await open({
-        title: "復元するフルバックアップを選択",
-        multiple: false,
-        directory: false,
-        filters: [{ name: "KnowledgeAppフルバックアップ", extensions: ["faqbackup"] }],
-      });
+      const selected = await selectRestoreBackupSource();
       if (!selected) return;
       setOperation("inspecting");
       setPreview(await knowledgeApi.inspectBackup(selected));
@@ -150,17 +143,20 @@ export function SettingsPage() {
 
   const restoreBackup = async () => {
     if (!preview) return;
+    const migrationNotice = legacyBackupNotice(preview.schemaVersion, hasCSharpBridge());
     const confirmed = window.confirm(
-      `「${preview.displayName}」を復元します。\n現在の状態は自動で安全バックアップされます。続けますか？`,
+      `「${preview.displayName}」を復元します。\n${migrationNotice ? `${migrationNotice}\n` : ""}現在の状態は自動で安全バックアップされます。続けますか？`,
     );
     if (!confirmed) return;
 
     clearFeedback();
     try {
       setOperation("restoring");
-      setRestoreResult(await knowledgeApi.restoreBackup(preview.sourcePath));
+      setRestoreResult(await knowledgeApi.restoreBackup(preview.sourcePath, preview.confirmationToken));
       setPreview(null);
     } catch (caught) {
+      // C# confirmations are one-use, including a failed restore attempt.
+      if (hasCSharpBridge()) setPreview(null);
       setOperationError(toAppError(caught));
     } finally {
       setOperation(null);
@@ -464,6 +460,14 @@ export function SettingsPage() {
               <div><dt>データサイズ</dt><dd>{formatBytes(preview.totalBytes)}</dd></div>
             </dl>
             <p className="restore-note">復元を開始する前に、現在の状態をPC内へ自動退避します。破損や形式不一致があるファイルは復元しません。会社管理の外部資料本体は復元対象外です。</p>
+            {hasCSharpBridge() && (
+              <p className="restore-note" role="note" aria-label="復元確認の有効期限">確認は10分間有効です。ファイルの変更、再ログイン、復元の再試行時は、バックアップを選び直してください。</p>
+            )}
+            {legacyBackupNotice(preview.schemaVersion, hasCSharpBridge()) && (
+              <p className="restore-note" role="note" aria-label="旧版バックアップの移行">
+                {legacyBackupNotice(preview.schemaVersion, hasCSharpBridge())}
+              </p>
+            )}
           </div>
         )}
       </section>

@@ -3,11 +3,14 @@ param([string]$TestDataRoot)
 
 $ErrorActionPreference = 'Stop'
 
-if (-not $env:LOCALAPPDATA) {
+$localDataFolder = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+if ([string]::IsNullOrWhiteSpace($localDataFolder)) {
     throw 'Windowsのローカル利用者データフォルダを取得できません。'
 }
 
-$dataRoot = Join-Path $env:LOCALAPPDATA 'jp.local.webknowledgesystem'
+# C# is the only production destination. Never probe or fall back to the old
+# Tauri or rehearsal root, and do not trust an environment-variable override.
+$dataRoot = Join-Path $localDataFolder 'jp.local.webknowledgesystem.csharp'
 if ($TestDataRoot) {
     $resolvedTestRoot = [IO.Path]::GetFullPath($TestDataRoot)
     $temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
@@ -21,7 +24,7 @@ if ($TestDataRoot) {
 }
 $catalogPath = Join-Path $dataRoot 'codex-bridge\categories.json'
 if (-not (Test-Path -LiteralPath $catalogPath -PathType Leaf)) {
-    throw 'KnowledgeAppの分類カタログがありません。KnowledgeAppを一度起動し、「Codexからの提案」で提案を更新してください。'
+    throw 'KnowledgeApp C#版の分類カタログがありません。C#版を一度起動し、「Codexからの提案」で提案を更新してください。旧版の保存先は探索しません。'
 }
 
 $catalog = Get-Content -Raw -Encoding UTF8 -LiteralPath $catalogPath | ConvertFrom-Json

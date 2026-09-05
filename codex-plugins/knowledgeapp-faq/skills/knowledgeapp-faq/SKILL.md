@@ -1,28 +1,39 @@
 ---
 name: knowledgeapp-faq
-description: KnowledgeAppへ登録する新規FAQ下書き、既存FAQの推敲・修正案、複数FAQの統合案と分類候補を作成し、ローカルの確認待ち提案箱へ送る。利用者が「この内容のFAQを作って」「KnowledgeAppへFAQ案を追加して」「委譲番号のFAQを推敲・修正して」「選択したFAQを統合して」と依頼した場合に使用する。SQLiteへの直接書き込み、自動公開、利用者確認なしの既存FAQ変更には使用しない。
+description: KnowledgeAppへ登録する新規FAQ下書き、既存FAQの推敲・修正案、複数FAQの統合案、明示委譲されたメール履歴からのFAQ案と分類候補を作成し、ローカルの確認待ち提案箱へ送る。利用者が「この内容のFAQを作って」「KnowledgeAppへFAQ案を追加して」「委譲番号のFAQを推敲・修正して」「選択したFAQを統合して」「メール委譲番号からFAQ案を作って」と依頼した場合に使用する。SQLiteやメール原本への直接アクセス、自動公開、利用者確認なしの既存FAQ変更には使用しない。
 ---
 
 # KnowledgeApp FAQ支援
 
 ## 守る境界
 
+- 対応先はC#正式版の固定ルート`%LOCALAPPDATA%\jp.local.webknowledgesystem.csharp`だけとする。コマンドはWindowsの既知フォルダーから解決し、環境変数、会話で渡されたパス、設定で保存先を切り替えない。
+- 旧Tauri版の`jp.local.webknowledgesystem`およびC#試作検証環境へ自動で戻らない。旧版の未処理委譲・提案は探索・コピー・自動移行せず、見つからない委譲はC#版で再発行してもらう。`TestDataRoot`は開発用合成試験の専用引数であり、実FAQへの使用は禁止する。
 - 新規FAQでは利用者が会話で提供した内容だけを使う。
 - 既存FAQではKnowledgeAppが発行した委譲番号のファイルだけを読む。委譲されていないFAQ、DB、WAL、SHM、検索・閲覧履歴を読まない。
+- メール履歴ではKnowledgeAppが発行したメール委譲番号に一致する単一JSONだけを読む。指定フォルダ、Outlookプロファイル、`.pst`、`.msg`、添付、未選択メールを探索・読取しない。
 - KnowledgeAppのDBや添付ファイルを直接変更しない。必ず確認待ち提案へ送る。
 - 修正案は指定された既存FAQ1件だけを対象とする。統合案は元FAQを変更・削除せず、新しい下書き候補にする。
 - パスワード、秘密鍵、個人情報など、利用者が依頼していない情報を追加しない。
 
 ## 手順
 
-1. 依頼が新規作成、推敲・修正、統合のどれかを判定する。
-2. 新規作成では`../../scripts/get-category-catalog.ps1`を実行する。委譲番号がある場合は`../../scripts/get-delegation.ps1 -DelegationId <UUID>`を実行し、必ず委譲内容を確認する。
+1. 依頼が新規作成、推敲・修正、統合、メール委譲からの新規作成のどれかを判定する。
+2. 新規作成では`../../scripts/get-category-catalog.ps1`を実行する。FAQ委譲番号がある場合は`../../scripts/get-delegation.ps1 -DelegationId <UUID>`、メール委譲番号がある場合は`../../scripts/get-mail-delegation.ps1 -DelegationId <UUID>`を実行し、必ず該当する1つの委譲内容だけを確認する。
 3. `references/proposal-format.md`を読み、形式第2版の提案を作る。
-4. 新規作成は`proposalKind: create`、`seriesId`は新しい`requestId`と同じ値、`sourceArticles`は空にする。
+4. 通常の新規作成は`proposalKind: create`、`seriesId`は新しい`requestId`と同じ値、`sourceArticles`は空にする。メール委譲からの新規作成も`proposalKind: create`かつ`sourceArticles`は空にし、追跡のため`seriesId`はメール委譲番号にする。
 5. 推敲・修正は`proposalKind: revise`、`seriesId`は委譲番号、`sourceArticles`は委譲FAQ1件のIDと`sourceUpdatedAt`をそのまま使う。分類候補は空、新規分類案は`null`にする。
 6. 統合は`proposalKind: merge`、`seriesId`は委譲番号、`sourceArticles`は委譲された2～10件をそのまま使う。元FAQを廃止・削除する提案は含めない。
 7. 提案JSONを標準入力から`../../scripts/submit-faq-proposal.ps1`へ渡す。リポジトリ内や会話出力へFAQデータの一時ファイルを作らない。
-8. 送信後、KnowledgeAppの「Codexからの提案」で内容を確認するよう案内する。
+8. 送信後、KnowledgeApp C#版の「Codexからの提案」で内容を確認するよう案内する。旧版へ届いた場合に手動で提案をコピーせず、このC#対応プラグインの適用を確認する。
+
+## メール委譲
+
+- `reviewConfirmed: true`の委譲だけを扱い、委譲JSONに含まれない情報を推測して補わない。
+- 複数メールは同じ質問への経緯や回答を補完する材料としてだけまとめる。独立した複数の質問が混在する場合は1つのFAQへ無理に統合せず、利用者へ選び直しを依頼する。
+- 署名、引用履歴、挨拶、社内固有の氏名・メールアドレスなど、FAQの解決手順に不要な内容を本文へ転記しない。
+- メールの日時、送信者、宛先は内容の判断材料にだけ使い、FAQに不可欠で利用者が残した場合を除いて回答本文へ記載しない。
+- メール原文を長く転載せず、確認できた結論と再現可能な手順へ要約する。確認できない前提、操作、URLを補完しない。
 
 ## 本文と画像
 

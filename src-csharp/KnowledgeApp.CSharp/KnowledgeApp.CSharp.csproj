@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <PlatformTarget>x64</PlatformTarget>
+    <Version>0.5.0</Version>
+    <Product>KnowledgeApp C#</Product>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4129.50" />
+    <ProjectReference Include="..\KnowledgeApp.Data\KnowledgeApp.Data.csproj" />
+    <ProjectReference Include="..\KnowledgeApp.Mail\KnowledgeApp.Mail.csproj" />
+    <ProjectReference Include="..\KnowledgeApp.Migration\KnowledgeApp.Migration.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="..\..\dist\index.html">
+      <Link>ui\index.html</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+    <Content Include="..\..\dist\assets\*">
+      <Link>ui\assets\%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
+  <Target Name="RequireCurrentUi" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('$(MSBuildThisFileDirectory)..\..\dist\index.html')" Text="Build the current React UI with npm run build before building the C# host." />
+  </Target>
+  <Target Name="CreateBuildUiManifest" AfterTargets="CopyFilesToOutputDirectory">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\..\scripts\Write-CSharpUiManifest.ps1&quot; -UiDirectory &quot;$(TargetDir)ui&quot; -ManifestPath &quot;$(TargetDir)ui-manifest.json&quot;" />
+  </Target>
+  <Target Name="CreatePublishUiManifest" AfterTargets="Publish">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\..\scripts\Write-CSharpUiManifest.ps1&quot; -UiDirectory &quot;$(PublishDir)ui&quot; -ManifestPath &quot;$(PublishDir)ui-manifest.json&quot;" />
+  </Target>
+</Project>

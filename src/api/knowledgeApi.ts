@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { hasCSharpBridge, invokeCSharp } from "./csharpBridge";
 import type {
   AppSettings,
   AppError,
@@ -70,7 +71,9 @@ export function toAppError(value: unknown): AppError {
 
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   try {
-    return await invoke<T>(command, args);
+    return hasCSharpBridge()
+      ? await invokeCSharp<T>(command, args)
+      : await invoke<T>(command, args);
   } catch (error) {
     const appError = toAppError(error);
     if (appError.code === "AUTH-002" && command !== "get_current_user") {
@@ -79,6 +82,15 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     }
     throw appError;
   }
+}
+
+function bytesToBase64(bytes: number[]): string {
+  const chunkSize = 32_768;
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.slice(offset, offset + chunkSize));
+  }
+  return window.btoa(binary);
 }
 
 export const knowledgeApi = {
@@ -193,13 +205,20 @@ export const knowledgeApi = {
   duplicateArticle: (id: string) => call<Article>("duplicate_article", { id }),
   stageArticleImage: (path: string) =>
     call<StagedArticleImage>("stage_article_image", { path }),
+  selectArticleImage: () =>
+    call<StagedArticleImage | null>("select_article_image"),
   stageArticleImageBytes: (originalName: string, bytes: number[]) =>
-    call<StagedArticleImage>("stage_article_image_bytes", {
-      input: { originalName, bytes },
-    }),
+    hasCSharpBridge()
+      ? call<StagedArticleImage>("stage_article_image_bytes", {
+        input: { originalName, bytesBase64: bytesToBase64(bytes) },
+      })
+      : call<StagedArticleImage>("stage_article_image_bytes", {
+        input: { originalName, bytes },
+      }),
   discardStagedArticleImage: (id: string) =>
     call<void>("discard_staged_article_image", { id }),
   openExternalUrl: (url: string) => call<void>("open_external_url", { url }),
+  writeClipboardText: (text: string) => call<void>("write_clipboard_text", { text }),
   listArticlesForManagement: (input: ManagementArticlesInput) =>
     call<ManagementArticlePage>("list_articles_for_management", { input }),
   exportFaqCsv: (destinationPath: string) =>
@@ -220,8 +239,10 @@ export const knowledgeApi = {
       input: { destinationPath, displayName, overwrite },
     }),
   inspectBackup: (path: string) => call<BackupPreview>("inspect_backup", { path }),
-  restoreBackup: async (path: string) => {
-    const result = await call<RestoreResult>("restore_backup", { path });
+  restoreBackup: async (path: string, confirmationToken?: string | null) => {
+    const result = await call<RestoreResult>("restore_backup", hasCSharpBridge()
+      ? { input: { path, confirmationToken: confirmationToken ?? null } }
+      : { path });
     window.dispatchEvent(new Event("knowledge-auth-expired"));
     window.location.hash = "/login";
     return result;

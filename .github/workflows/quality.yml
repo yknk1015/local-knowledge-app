@@ -42,17 +42,112 @@ jobs:
       - name: Build frontend
         run: npm run build
 
-      - name: Check Rust formatting
+      - name: Set up .NET 10 for the primary C# application
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.204
+
+      - name: Build the primary C# application with the existing React UI
+        run: dotnet build src-csharp/KnowledgeApp.CSharp/KnowledgeApp.CSharp.csproj --configuration Release
+
+      - name: Verify C# authentication and SQLite boundary
+        run: dotnet run --project src-csharp/KnowledgeApp.DataCheck/KnowledgeApp.DataCheck.csproj --configuration Release
+
+      - name: Verify C# Codex proposals and explicit delegation boundary
+        run: dotnet run --project src-csharp/KnowledgeApp.CodexCheck/KnowledgeApp.CodexCheck.csproj --configuration Release
+
+      - name: Verify persistent C# rehearsal on isolated synthetic roots
+        run: dotnet run --project src-csharp/KnowledgeApp.RehearsalCheck/KnowledgeApp.RehearsalCheck.csproj --configuration Release
+
+      - name: Verify staged migration of legacy backups on synthetic data
+        run: dotnet run --project src-csharp/KnowledgeApp.LegacyBackupCheck/KnowledgeApp.LegacyBackupCheck.csproj --configuration Release
+
+      - name: Verify long and nested article compatibility on synthetic data
+        run: dotnet run --project src-csharp/KnowledgeApp.RichCompatibilityCheck/KnowledgeApp.RichCompatibilityCheck.csproj --configuration Release
+
+      - name: Verify generated C# manual fixture against the Tiptap schema
+        run: node scripts/test-csharp-codex-fixture.mjs
+
+      - name: Verify session-bound single-use backup confirmation on synthetic data
+        run: dotnet run --project src-csharp/KnowledgeApp.BackupConfirmationCheck/KnowledgeApp.BackupConfirmationCheck.csproj --configuration Release
+
+      - name: Verify C# WebView trust boundary
+        run: dotnet run --project src-csharp/KnowledgeApp.SecurityCheck/KnowledgeApp.SecurityCheck.csproj --configuration Release
+
+      - name: Verify synthetic production startup and crash recovery
+        shell: pwsh
+        run: |
+          dotnet run --project src-csharp/KnowledgeApp.ProductionCheck --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'Synthetic C# production startup or legacy-root isolation failed.' }
+          dotnet run --project src-csharp/KnowledgeApp.RestoreCrashCheck --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'Synthetic interrupted restore recovery failed.' }
+
+      - name: Verify legacy startup and installation guards without user applications
+        shell: pwsh
+        run: |
+          dotnet run --project src-csharp/KnowledgeApp.LegacyInstanceCheck --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'Synthetic legacy instance guard failed.' }
+          dotnet run --project src-csharp/KnowledgeApp.InstallationGuardCheck --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'Synthetic installation guard failed.' }
+
+      - name: Verify C# single-instance and bounded activation
+        run: dotnet run --project src-csharp/KnowledgeApp.SingleInstanceCheck/KnowledgeApp.SingleInstanceCheck.csproj --configuration Release
+
+      - name: Verify C# packaged UI integrity
+        run: dotnet run --project src-csharp/KnowledgeApp.UiBundleCheck/KnowledgeApp.UiBundleCheck.csproj --configuration Release
+
+      - name: Build and verify the primary C# release package
+        id: csharp_package
+        shell: pwsh
+        run: |
+          $releasePackage = & ./scripts/New-CSharpReleasePackage.ps1 | Select-Object -Last 1
+          if (-not $releasePackage.packageDirectory -or -not $releasePackage.archive) { throw 'No verified C# release package was produced.' }
+          ./scripts/Test-CSharpReleasePackage.ps1 -PackageDirectory $releasePackage.packageDirectory -SourceUiDirectory ./dist
+          ./scripts/Test-CSharpTrialPackageRegression.ps1 -PackageDirectory $releasePackage.packageDirectory
+          ./scripts/check-no-runtime-data.ps1 -ReleaseDirectory $releasePackage.packageDirectory
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "package_directory=$($releasePackage.packageDirectory)`narchive=$($releasePackage.archive)`n", [Text.UTF8Encoding]::new($false))
+
+      - name: Verify C# mail delegation boundary
+        run: dotnet run --project src-csharp/KnowledgeApp.MailCheck/KnowledgeApp.MailCheck.csproj --configuration Release
+
+      - name: Verify approved C# primary use does not mark pending final checks as passed
+        run: dotnet run --project src-csharp/KnowledgeApp.MigrationGate/KnowledgeApp.MigrationGate.csproj --configuration Release -- dist
+
+      - name: Check legacy Rust compatibility-source formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
 
-      - name: Run Rust lints
+      - name: Run legacy Rust compatibility-source lints
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
-      - name: Run Rust tests
+      - name: Run retained legacy Rust compatibility tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked
 
-      - name: Build Windows NSIS installer
+      - name: Verify C# and Rust Codex JSON interoperability on synthetic data
+        run: dotnet run --project src-csharp/KnowledgeApp.CodexInteropCheck/KnowledgeApp.CodexInteropCheck.csproj --configuration Release
+
+      - name: Verify actual backup and PowerShell command interoperability on synthetic data
+        run: dotnet run --project src-csharp/KnowledgeApp.FinalInteropCheck --configuration Release
+
+      - name: Build legacy Tauri compatibility installer and prepare cached NSIS compiler
         run: npm run tauri build
+
+      - name: Verify C# NSIS lifecycle in an owned isolated installation
+        shell: pwsh
+        env:
+          CSHARP_RELEASE_PACKAGE: ${{ steps.csharp_package.outputs.package_directory }}
+        run: |
+          ./scripts/Test-CSharpInstallerRegression.ps1 -PackageDirectory $env:CSHARP_RELEASE_PACKAGE
+
+      - name: Build the primary C# Windows NSIS release installer
+        id: csharp_installer
+        shell: pwsh
+        env:
+          CSHARP_RELEASE_PACKAGE: ${{ steps.csharp_package.outputs.package_directory }}
+        run: |
+          $releaseInstaller = & ./scripts/New-CSharpInstaller.ps1 -PackageDirectory $env:CSHARP_RELEASE_PACKAGE | Select-Object -Last 1
+          if (-not $releaseInstaller.installer -or $releaseInstaller.mode -ne 'csharp-production') { throw 'No verified C# production installer was produced.' }
+          Get-FileHash -LiteralPath $releaseInstaller.installer -Algorithm SHA256 | Format-Table -AutoSize
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "installer=$($releaseInstaller.installer)`n", [Text.UTF8Encoding]::new($false))
 
       - name: Verify built files contain no runtime data
         shell: pwsh
@@ -62,16 +157,18 @@ jobs:
           ./scripts/check-no-runtime-data.ps1 -ReleaseDirectory ./src-tauri/target/release/bundle
           ./scripts/check-release-bundle-config.ps1 -InstallerDirectory ./src-tauri/target/release/bundle/nsis
 
-      - name: Record NSIS installer SHA-256
+      - name: Record retained legacy compatibility-installer SHA-256
         shell: pwsh
         run: |
           Get-ChildItem -LiteralPath ./src-tauri/target/release/bundle/nsis -Filter '*.exe' -File |
             Get-FileHash -Algorithm SHA256 |
             Format-Table -AutoSize
 
-      - name: Upload Windows NSIS installer
+      - name: Upload the primary C# Windows release artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: KnowledgeApp-Windows-NSIS-${{ github.sha }}
-          path: src-tauri/target/release/bundle/nsis/KnowledgeApp_0.4.4_*-setup.exe
+          name: KnowledgeApp-CSharp-0.5.0-Windows-${{ github.sha }}
+          path: |
+            ${{ steps.csharp_package.outputs.archive }}
+            ${{ steps.csharp_installer.outputs.installer }}
           if-no-files-found: error

@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
 import { Link } from "react-router-dom";
 import { knowledgeApi, toAppError } from "../api/knowledgeApi";
+import { selectFaqCsvImportPath } from "../api/transferDialogs";
 import { ErrorState, LoadingState } from "../components/Feedback";
 import type { AppError, CsvImportPreview, CsvImportResult } from "../types/domain";
 
@@ -14,7 +14,7 @@ export function CsvImportPage() {
   const [error, setError] = useState<AppError | null>(null);
 
   const choose = async () => {
-    const selected = await open({ multiple: false, directory: false, filters: [{ name: "KnowledgeApp FAQ CSV", extensions: ["csv"] }] });
+    const selected = await selectFaqCsvImportPath();
     if (!selected) return;
     setLoading(true); setError(null); setPreview(null); setResult(null);
     try { setPreview(await knowledgeApi.inspectFaqCsv(selected)); }
