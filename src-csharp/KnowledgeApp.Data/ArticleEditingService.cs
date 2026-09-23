@@ -22,25 +22,28 @@ public sealed class ArticleEditingService
 
     public IReadOnlyList<TagMasterItem> ListTags()
     {
-        _authentication.RequireUser();
-        return _database.ListTags();
+        var actor = _authentication.RequireUser();
+        var tags = _database.ListTags();
+        return actor.Role == UserRoles.Viewer ? tags.Select(t => t with { UsageCount = 0 }).ToArray() : tags;
     }
 
     public TagMasterItem SaveTag(string? id, string name)
     {
-        _authentication.RequireUser();
+        _authentication.RequireAdmin();
         return _database.SaveTag(id, name);
     }
 
     public void DeleteTag(string id)
     {
-        _authentication.RequireUser();
+        _authentication.RequireAdmin();
         _database.DeleteTag(id);
     }
 
-    public ArticleDetail SaveArticle(SaveArticleInput input)
+    public ArticleDetail SaveArticle(SaveArticleInput input) => _authentication.ExecuteForEditorSession(_ => _database.InOperation(() => SaveArticleLocked(input)));
+
+    private ArticleDetail SaveArticleLocked(SaveArticleInput input)
     {
-        var actor = _authentication.RequireUser();
+        var actor = _authentication.RequireEditor();
         ValidateInput(input);
         var content = SafeRichContentValidator.Validate(input.BodyDoc);
         if (input.Status == ArticleStatuses.Published && string.IsNullOrWhiteSpace(content.PlainText))
@@ -66,9 +69,11 @@ public sealed class ArticleEditingService
         return _attachments.HydrateArticle(_database.GetArticle(articleId));
     }
 
-    public ArticleDetail DuplicateArticle(string id)
+    public ArticleDetail DuplicateArticle(string id) => _authentication.ExecuteForEditorSession(_ => _database.InOperation(() => DuplicateArticleLocked(id)));
+
+    private ArticleDetail DuplicateArticleLocked(string id)
     {
-        var actor = _authentication.RequireUser();
+        var actor = _authentication.RequireEditor();
         var source = _database.GetArticle(id);
         if (source.DeletedAt is not null)
         {
@@ -126,7 +131,7 @@ public sealed class ArticleEditingService
 
     public ManagementArticlePage ListArticlesForManagement(ManagementArticlesInput input)
     {
-        _authentication.RequireUser();
+        _authentication.RequireEditor();
         if (input.Query.EnumerateRunes().Count() > 500 ||
             input.Status is not null && !ArticleStatuses.IsValid(input.Status))
         {
@@ -139,39 +144,39 @@ public sealed class ArticleEditingService
 
     public ArticleDetail DeleteArticle(string id)
     {
-        var actor = _authentication.RequireUser();
+        var actor = _authentication.RequireAdmin();
         _database.DeleteArticleCore(id, actor.Id);
         return _attachments.HydrateArticle(_database.GetArticle(id));
     }
 
     public ArticleDetail RestoreArticle(string id)
     {
-        var actor = _authentication.RequireUser();
+        var actor = _authentication.RequireAdmin();
         _database.RestoreArticleCore(id, actor.Id);
         return _attachments.HydrateArticle(_database.GetArticle(id));
     }
 
     public StagedArticleImage StageArticleImage(string path)
     {
-        _authentication.RequireUser();
+        _authentication.RequireEditor();
         return _attachments.StageFromPath(path);
     }
 
     public StagedArticleImage StageArticleImageBase64(StageArticleImageBase64Input input)
     {
-        _authentication.RequireUser();
+        _authentication.RequireEditor();
         return _attachments.StageBase64(input);
     }
 
     public void DiscardStagedArticleImage(string id)
     {
-        _authentication.RequireUser();
+        _authentication.RequireEditor();
         _attachments.DiscardStage(id);
     }
 
     public CodexMergePublicationContext? GetCodexMergePublicationContext(string articleId)
     {
-        _authentication.RequireUser();
+        _authentication.RequireEditor();
         return _database.GetCodexMergePublicationContext(articleId);
     }
 

@@ -67,7 +67,7 @@ internal sealed class LegacyFixture
             if (version >= 3) Execute(db, "UPDATE categories SET description=$value", ("$value", "旧版から保持する合成説明"));
             if (version >= 6 && !emptyV6)
             {
-                foreach (var (id, login, role) in new[] { (existingAdminId, adminLogin, "admin"), (UserId, "legacy-user", "user") })
+                foreach (var (id, login, role) in new[] { (existingAdminId, adminLogin, "admin"), (UserId, "legacy-user", version >= 9 ? "editor" : "user") })
                     Insert(db, "users", new() { ["id"] = id, ["login_id"] = login, ["normalized_login_id"] = login, ["display_name"] = "合成旧版" + role, ["password_hash"] = Argon2PasswordCodec.Hash(Password), ["role"] = role, ["is_active"] = 1, ["created_at"] = Timestamp, ["updated_at"] = Timestamp, ["last_login_at"] = Timestamp });
             }
             foreach (var id in new[] { ArticleId, RelatedId, DeletedId })

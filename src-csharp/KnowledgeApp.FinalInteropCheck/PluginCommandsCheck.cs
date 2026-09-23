@@ -39,8 +39,8 @@ internal static partial class FinalInteropCheck
         Check(Directory.GetFiles(pluginRoot, "*", SearchOption.AllDirectories).SequenceEqual([mirror]), "Plugin sandbox contains exactly the explicitly delegated file, not a DB or unselected content");
 
         var get = await RunPlugin(shell, "get-delegation.ps1", pluginRoot, delegation.DelegationId);
-        Check(get.ExitCode == 0, "Real plugin get-delegation command accepts C# delegation in explicit test mode");
         if (get.ExitCode != 0) throw new InvalidOperationException(get.Error);
+        Check(get.ExitCode == 0, "Real plugin get-delegation command accepts C# delegation in explicit test mode");
         using var read = JsonDocument.Parse(get.Output);
         var readSource = read.RootElement.GetProperty("articles").EnumerateArray().Single();
         Check(read.RootElement.GetProperty("delegationId").GetString() == delegation.DelegationId && readSource.GetProperty("articleId").GetString() == source.Id, "Plugin command reads only the requested delegation and selected source ID");

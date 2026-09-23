@@ -1,3 +1,4 @@
+import { usePermissions } from "../app/AuthContext";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { knowledgeApi, toAppError } from "../api/knowledgeApi";
@@ -19,6 +20,7 @@ const EMPTY_PAGE: ManagementArticlePage = { items: [], total: 0, page: 1, pageSi
 type ManagementViewMode = "normal" | "detail";
 
 export function ArticleManagementPage() {
+  const { isAdmin } = usePermissions();
   const navigate = useNavigate();
   const [categories, setCategories] = useState<Category[]>([]);
   const [result, setResult] = useState<ManagementArticlePage>(EMPTY_PAGE);
@@ -202,9 +204,9 @@ export function ArticleManagementPage() {
           <p>通常検索に出ないFAQを含め、状態の確認、編集、統合解除、削除、復元を行えます。</p>
         </div>
         <div className="management-heading-actions">
-          <button type="button" className="button secondary" disabled={busyId === "csv-export"} onClick={() => void exportCsv()}>CSVエクスポート</button>
-          <Link to="/manage/csv-import" className="button secondary">CSVインポート</Link>
-          <Link to="/manage/json-transfer" className="button secondary">JSON入出力</Link>
+          {isAdmin && <button type="button" className="button secondary" disabled={busyId === "csv-export"} onClick={() => void exportCsv()}>CSVエクスポート</button>}
+          {isAdmin && <Link to="/manage/csv-import" className="button secondary">CSVインポート</Link>}
+          {isAdmin && <Link to="/manage/json-transfer" className="button secondary">JSON入出力</Link>}
           <Link to="/articles/new" className="button primary">＋ 新しいFAQ</Link>
         </div>
       </div>
@@ -371,9 +373,9 @@ export function ArticleManagementPage() {
                     <div className="management-row-actions-inner">
                       {deleted ? (
                         <>
-                          <button type="button" className="button secondary" disabled={busyId === article.id} onClick={() => void restoreArticle(article.id, article.title)}>
+                          {isAdmin && <button type="button" className="button secondary" disabled={busyId === article.id} onClick={() => void restoreArticle(article.id, article.title)}>
                             復元
-                          </button>
+                          </button>}
                           {article.mergeInfo && (
                             <div className="management-action-menu">
                               <button
@@ -414,9 +416,9 @@ export function ArticleManagementPage() {
                                     統合を解除
                                   </button>
                                 )}
-                                <button type="button" role="menuitem" className="danger" disabled={busyId === article.id} onClick={() => { setOpenActionMenuId(null); void deleteArticle(article.id, article.title); }}>
+                                {isAdmin && <button type="button" role="menuitem" className="danger" disabled={busyId === article.id} onClick={() => { setOpenActionMenuId(null); void deleteArticle(article.id, article.title); }}>
                                   削除
-                                </button>
+                                </button>}
                               </div>
                             )}
                           </div>

@@ -20,7 +20,7 @@ description: KnowledgeAppへ登録する新規FAQ下書き、既存FAQの推敲�
 
 1. 依頼が新規作成、推敲・修正、統合、メール委譲からの新規作成のどれかを判定する。
 2. 新規作成では`../../scripts/get-category-catalog.ps1`を実行する。FAQ委譲番号がある場合は`../../scripts/get-delegation.ps1 -DelegationId <UUID>`、メール委譲番号がある場合は`../../scripts/get-mail-delegation.ps1 -DelegationId <UUID>`を実行し、必ず該当する1つの委譲内容だけを確認する。
-3. `references/proposal-format.md`を読み、形式第2版の提案を作る。
+3. `references/proposal-format.md`と`references/faq-writing.md`を読み、形式第2版の提案を作る。
 4. 通常の新規作成は`proposalKind: create`、`seriesId`は新しい`requestId`と同じ値、`sourceArticles`は空にする。メール委譲からの新規作成も`proposalKind: create`かつ`sourceArticles`は空にし、追跡のため`seriesId`はメール委譲番号にする。
 5. 推敲・修正は`proposalKind: revise`、`seriesId`は委譲番号、`sourceArticles`は委譲FAQ1件のIDと`sourceUpdatedAt`をそのまま使う。分類候補は空、新規分類案は`null`にする。
 6. 統合は`proposalKind: merge`、`seriesId`は委譲番号、`sourceArticles`は委譲された2～10件をそのまま使う。元FAQを廃止・削除する提案は含めない。
@@ -37,14 +37,7 @@ description: KnowledgeAppへ登録する新規FAQ下書き、既存FAQの推敲�
 
 ## 本文と画像
 
-- タイトルは検索しやすい質問文とし、`【分類名】`の接頭辞を含めない。検索結果への`【トップ分類名】`表示はKnowledgeAppの設定が現在の分類階層から動的に付ける。修正案でも表示設定を理由に接頭辞を追加・削除しない。
-- 概要は500文字以内、重要度は1～3にする。
-- 操作手順は番号付きリスト、補足や注意は見出し・箇条書きで読みやすくする。
-- 文章だけでは操作箇所や状態の違いが伝わりにくく、視認性・理解を実質的に高める場合だけ画像・スクリーンショットを使う。装飾目的では使わない。
-- 利用者が作成・提供した画像、または利用条件を確認できた画像だけを使う。著作権侵害のおそれや利用条件が不明な場合は使わず、文章で補う。個人情報・機密情報・認証情報は除去またはマスクし、追加する画像には代替テキストを付ける。
-- 新規・統合案に画像を含めない。画像が必要なら、送信後に追加すべき手順、画像内容、挿入位置、代替テキスト案を利用者へ案内し、取込後に追加してもらう。
-- 修正案では委譲元にある`image`ノード、`attachmentId`、`src`、`alt`を一字も変えず、全件を維持する。画像を追加・削除・並べ替えしない。
-- URLは通常テキストにする。利用者がクリック可能な参考URLを求めた場合だけHTTP/HTTPSリンクにする。
+新規・修正・統合・メール委譲のいずれでも、本文を作る前に [references/faq-writing.md](references/faq-writing.md) を読む。タイトル・概要・手順・注意・画像・参考リンクの標準構成はこの参照に集約する。
 
 ## 分類判断
 
@@ -58,3 +51,8 @@ description: KnowledgeAppへ登録する新規FAQ下書き、既存FAQの推敲�
 - 新規・統合は未公開の下書き候補、修正は未反映の確認待ち候補として存在する。
 - 利用者へ、アプリ上で差分・分類を確認し、承認または却下する必要があると伝える。
 - 画像が必要な新規・統合案では、追加箇所、画像内容、代替テキスト案と、権利・機密情報を確認する必要があることを伝える。
+
+
+### 保存先変更後の連携環境
+
+分類取得・委譲取得コマンドがenvironmentIdとexchangeGenerationを表示した場合、新規・修正・統合提案JSONのルートへその値をそのまま含める。依頼途中で保存先の世代が変わった場合、古い本文を新しい世代へ付け替えて再送せず、利用者にKnowledgeAppで委譲し直してもらう。固定場所のDBや旧連携先を自分で探索しない。保存先の解決は同梱コマンドだけへ任せる。

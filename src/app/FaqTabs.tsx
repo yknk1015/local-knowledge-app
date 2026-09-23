@@ -232,7 +232,7 @@ export function FaqTabBar() {
           className="faq-tabs"
           role="tablist"
           aria-label={`開いているFAQ ${tabs.length}件（最大${MAX_FAQ_TABS}件）`}
-          style={{ gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))` }}
+          style={{ gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 260px))` }}
         >
           {tabs.map((tab) => {
             const active = tab.articleId === activeArticleId;

@@ -30,7 +30,8 @@ public sealed record SaveArticleInput(
     IReadOnlyList<string> Cautions,
     IReadOnlyList<string> Tags,
     IReadOnlyList<string> SearchTerms,
-    IReadOnlyList<string> RelatedArticleIds);
+    IReadOnlyList<string> RelatedArticleIds,
+    long? ExpectedRevision = null);
 
 public sealed record TagMasterItem(
     string Id,

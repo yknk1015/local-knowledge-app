@@ -17,7 +17,7 @@ public sealed partial class KnowledgeDatabase
     private const long MaximumBackupBytes = 10L * 1024 * 1024 * 1024;
     private const long MinimumBackupCapacityMargin = 1024 * 1024;
     private const long MaximumManifestBytes = 5L * 1024 * 1024;
-    private const string CSharpBackupAppVersion = "0.4.4-csharp-migration";
+    private const string CSharpBackupAppVersion = SettingsService.CSharpAppVersion;
     private static readonly JsonSerializerOptions StrictBackupJsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -71,6 +71,7 @@ public sealed partial class KnowledgeDatabase
             var manifest = ExtractVerifiedBackupArchive(source, staging, expectedFileSha256, BackupSourceVerifiedForTest);
             var restoredDatabase = Path.Combine(staging, "data", "knowledge.db");
             PrepareBackupSnapshotForRestore(restoredDatabase, manifest);
+            RequireSharedRestoreAdministrator(restoredDatabase);
             foreach (var relative in new[] { Path.Combine("attachments", "articles"), "manuals", "settings" })
             {
                 FileSystemBoundary.CreateManagedDirectory(resolvedRoot, Path.Combine(staging, relative));
@@ -86,6 +87,7 @@ public sealed partial class KnowledgeDatabase
                 new CreateFullBackupInput(safetyPath, safetyName, false),
                 rememberDestination: false);
 
+            RecoveryEpoch = Guid.NewGuid();
             BeginRestoreJournal(resolvedRoot, safetyPath);
             journalStarted = true;
             RestoreCheckpointForTest?.Invoke("journal-written");
@@ -133,6 +135,7 @@ public sealed partial class KnowledgeDatabase
         CreateFullBackupInput input,
         bool rememberDestination)
     {
+        var sourceVersion = SchemaVersion(_connection);
         var estimatedBytes = EstimateBackupSourceBytes(dataRoot);
         var requiredArchiveBytes = RequiredArchiveCapacity(estimatedBytes);
         var destination = ValidateBackupDestination(
@@ -157,7 +160,7 @@ public sealed partial class KnowledgeDatabase
             {
                 _connection.BackupDatabase(snapshotConnection);
                 QuickCheck(snapshotConnection);
-                if (SchemaVersion(snapshotConnection) != MigrationCatalog.CurrentVersion)
+                if (SchemaVersion(snapshotConnection) != sourceVersion)
                 {
                     throw BackupReadProblem("バックアップ用データベースの版を確認できませんでした。");
                 }
@@ -181,7 +184,7 @@ public sealed partial class KnowledgeDatabase
             var manifest = new TransferBackupManifest(
                 BackupFormatVersion,
                 CSharpBackupAppVersion,
-                MigrationCatalog.CurrentVersion,
+                sourceVersion,
                 RichTextBackupFormatVersion,
                 DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture),
                 input.DisplayName.Trim(),
@@ -236,6 +239,7 @@ public sealed partial class KnowledgeDatabase
             ExtractNamedBackupEntry(source, "data/knowledge.db", snapshot,
                 manifest.Files.Single(entry => string.Equals(entry.Path, "data/knowledge.db", StringComparison.OrdinalIgnoreCase)), archive);
             PrepareBackupSnapshotForRestore(snapshot, manifest);
+            RequireSharedRestoreAdministrator(snapshot);
         }
         finally
         {

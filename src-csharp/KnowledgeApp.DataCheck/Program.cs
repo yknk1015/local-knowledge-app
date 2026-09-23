@@ -33,6 +33,7 @@ var roots = new[]
 try
 {
     VerifyHostOperationPolicy();
+    RecoveryKeyCheck.Run();
     TagMasterCheck.Run();
     FileBoundaryCheck.Run();
     DispatcherTagCheck.Run();
@@ -56,7 +57,7 @@ try
             $"knowledgeapp-data-check-{Guid.NewGuid():D}")),
         "DB-001");
 
-    Console.WriteLine("OK: C#認証・権限、分類CRUD、同義語、日本語検索、FTS5、FAQ詳細、FAQ編集、リッチテキスト、画像確定・独立複製・除去・削除復元、URL・コピー境界、監査、関連FAQ、最大10件分の読取、検索・閲覧履歴、端末情報・表示設定、CSV・JSON、フルバックアップのSHA検査・上書き・Git拒否・破損拒否・安全退避・DB/画像/設定復元・復元後ログアウト、長時間I/O終了ガードの対象17件と対象外、DB第1～7版移行を合成DBで確認しました。");
+    Console.WriteLine("OK: C#認証・権限、分類CRUD、同義語、日本語検索、FTS5、FAQ詳細、FAQ編集、リッチテキスト、画像確定・独立複製・除去・削除復元、URL・コピー境界、監査、関連FAQ、最大10件分の読取、検索・閲覧履歴、端末情報・表示設定、CSV・JSON、フルバックアップのSHA検査・上書き・Git拒否・破損拒否・安全退避・DB/画像/設定復元・復元後ログアウト、長時間I/O終了ガードの対象21件と対象外、DB第1～8版移行を合成DBで確認しました。");
     return 0;
 }
 finally
@@ -76,7 +77,8 @@ static void VerifyHostOperationPolicy()
         "export_json", "inspect_json", "import_json",
         "list_codex_proposals", "accept_codex_proposal", "reject_codex_proposal",
         "reopen_rejected_codex_proposal", "create_codex_delegation",
-        "mark_codex_merge_sources", "clear_article_merge", "save_tag"
+        "mark_codex_merge_sources", "clear_article_merge", "save_tag",
+        "issue_recovery_key", "verify_recovery_key", "complete_password_recovery", "skip_recovery_setup"
     ];
     foreach (var command in guardedCommands)
     {
@@ -112,9 +114,9 @@ static void VerifyNewDatabaseAndAuthentication(string root)
     using var database = KnowledgeDatabase.OpenSynthetic(root);
     if (!database.OpenInfo.Created ||
         database.OpenInfo.PreviousSchemaVersion != 0 ||
-        database.OpenInfo.CurrentSchemaVersion != 7 ||
+        database.OpenInfo.CurrentSchemaVersion != MigrationCatalog.CurrentVersion ||
         database.OpenInfo.MigrationBackupPath is not null ||
-        database.SchemaVersionForTest() != 7 ||
+        database.SchemaVersionForTest() != MigrationCatalog.CurrentVersion ||
         database.QuickCheckForTest() != "ok")
     {
         throw new InvalidOperationException("新規合成DBの初期化結果が正しくありません。");
@@ -216,16 +218,16 @@ static void VerifyVersionOneMigration(string root)
     using var database = KnowledgeDatabase.OpenSynthetic(root);
     if (database.OpenInfo.Created ||
         database.OpenInfo.PreviousSchemaVersion != 1 ||
-        database.OpenInfo.CurrentSchemaVersion != 7 ||
+        database.OpenInfo.CurrentSchemaVersion != MigrationCatalog.CurrentVersion ||
         database.OpenInfo.MigrationBackupPath is null ||
         !File.Exists(database.OpenInfo.MigrationBackupPath))
     {
-        throw new InvalidOperationException("DB第1版から第7版への移行情報が正しくありません。");
+        throw new InvalidOperationException("DB第1版から第8版への移行情報が正しくありません。");
     }
 
     using (var current = Open(databasePath, SqliteOpenMode.ReadOnly))
     {
-        if (ScalarInt64(current, "SELECT MAX(version) FROM schema_migrations") != 7 ||
+        if (ScalarInt64(current, "SELECT MAX(version) FROM schema_migrations") != MigrationCatalog.CurrentVersion ||
             ScalarInt64(current, "SELECT COUNT(*) FROM articles WHERE id = 'article-v1'") != 1 ||
             ScalarString(current, "SELECT created_by_user_id FROM articles WHERE id = 'article-v1'") != KnowledgeDatabase.InitialAdminUserId ||
             ScalarString(current, "SELECT updated_by_user_id FROM articles WHERE id = 'article-v1'") != KnowledgeDatabase.InitialAdminUserId)
@@ -248,11 +250,11 @@ static void VerifyFutureVersionIsRejected(string root)
     var databasePath = CreateVersionOneDatabase(root, includeArticle: false);
     using (var connection = Open(databasePath, SqliteOpenMode.ReadWrite))
     {
-        Execute(connection, "INSERT INTO schema_migrations(version, applied_at) VALUES (8, 'synthetic')");
+        Execute(connection, "INSERT INTO schema_migrations(version, applied_at) VALUES (999, 'synthetic')");
     }
     ExpectProblem(() => KnowledgeDatabase.OpenSynthetic(root), "DB-001");
     using var check = Open(databasePath, SqliteOpenMode.ReadOnly);
-    if (ScalarInt64(check, "SELECT MAX(version) FROM schema_migrations") != 8)
+    if (ScalarInt64(check, "SELECT MAX(version) FROM schema_migrations") != 999)
     {
         throw new InvalidOperationException("将来版拒否時に元DBが変更されました。");
     }
@@ -732,6 +734,8 @@ static void VerifyArticleEditingAndAudit(string root)
         throw new InvalidOperationException("FAQ管理一覧の検索、配下分類または作成者・更新者表示が正しくありません。");
     }
 
+    ExpectProblem(() => editing.DeleteArticle(copy.Id), "AUTH-003");
+    authentication.Login("0000", string.Empty);
     editing.DeleteArticle(copy.Id);
     if (database.GetArticle(copy.Id).DeletedAt is null || database.FtsCountForArticleForTest(copy.Id) != 0 ||
         Search(search, "c#編集済み", null, SearchScopes.All, true, 1).Items.Any(article => article.Id == copy.Id))
@@ -745,7 +749,7 @@ static void VerifyArticleEditingAndAudit(string root)
         throw new InvalidOperationException("削除済みFAQを管理一覧で確認できませんでした。");
     }
     var restored = editing.RestoreArticle(copy.Id);
-    if (restored.DeletedAt is not null || restored.UpdatedByUserId != secondUser.Id ||
+    if (restored.DeletedAt is not null || restored.UpdatedByUserId != KnowledgeDatabase.InitialAdminUserId ||
         database.FtsCountForArticleForTest(copy.Id) != 1 ||
         !Search(search, "c#編集済み", null, SearchScopes.All, true, 1).Items.Any(article => article.Id == copy.Id))
     {

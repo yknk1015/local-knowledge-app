@@ -7,10 +7,7 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="../KnowledgeApp.Data/FileSystemBoundary.cs" Link="FileSystemBoundary.cs" />
-    <Compile Include="../KnowledgeApp.Data/RehearsalDataRoot.cs" Link="RehearsalDataRoot.cs" />
-    <Compile Include="../KnowledgeApp.Data/ProductionDataRoot.cs" Link="ProductionDataRoot.cs" />
-    <Compile Include="../KnowledgeApp.Data/AppProblem.cs" Link="AppProblem.cs" />
+    <ProjectReference Include="../KnowledgeApp.Data/KnowledgeApp.Data.csproj" />
     <Compile Include="../KnowledgeApp.CSharp/UiBundleLocator.cs" Link="UiBundleLocator.cs" />
   </ItemGroup>
 </Project>

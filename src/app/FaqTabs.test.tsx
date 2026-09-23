@@ -84,7 +84,7 @@ describe("FaqTabs", () => {
     expect(screen.getByTestId("count")).toHaveTextContent(String(MAX_FAQ_TABS));
     expect(screen.getAllByRole("tab")).toHaveLength(MAX_FAQ_TABS);
     expect((screen.getByRole("tablist") as HTMLDivElement).style.gridTemplateColumns)
-      .toBe("repeat(10, minmax(0, 1fr))");
+      .toBe("repeat(10, minmax(0, 260px))");
   });
 
   it("11件目では既存タブを閉じず、所定メッセージを表示する", () => {

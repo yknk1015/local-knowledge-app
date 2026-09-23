@@ -27,7 +27,11 @@ $command = Join-Path $sourceRoot ('codex-plugins\knowledgeapp-faq\scripts\' + $C
 # Windows PowerShell 5.1 otherwise reads BOM-less source in the ANSI code page.
 # Execute the actual fixed source with an explicit UTF-8 decode, not a copy or
 # a rewritten implementation. Proposal content is passed only as a parameter.
-$commandBlock = [scriptblock]::Create([IO.File]::ReadAllText($command, $utf8))
+$parseTokens = $null
+$parseErrors = $null
+$ast = [Management.Automation.Language.Parser]::ParseInput([IO.File]::ReadAllText($command, $utf8), $command, [ref]$parseTokens, [ref]$parseErrors)
+if ($parseErrors.Count -ne 0) { throw 'Plugin source could not be parsed.' }
+$commandBlock = $ast.GetScriptBlock()
 if ($CommandName -in @('get-delegation.ps1', 'get-mail-delegation.ps1')) {
     & $commandBlock -TestDataRoot $taskRoot -DelegationId $DelegationId
 }

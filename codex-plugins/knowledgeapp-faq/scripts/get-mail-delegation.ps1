@@ -31,6 +31,13 @@ if ($TestDataRoot) {
     $dataRoot = $resolvedTestRoot
 }
 
+. ([scriptblock]::Create([IO.File]::ReadAllText((Join-Path $PSScriptRoot 'ExchangeLocation.Common.ps1'), [Text.UTF8Encoding]::new($false, $true))))
+$exchange = Open-KnowledgeExchange $dataRoot
+$dataRoot = $exchange.Root
+try {
+if ($exchange.Generation -gt 0) {
+    Write-Output ('連携環境 environmentId: ' + $exchange.EnvironmentId + ' / exchangeGeneration: ' + $exchange.Generation + '。提案JSONのルートへこの2項目を含めてください。')
+}
 $path = Join-Path $dataRoot ('codex-bridge\mail-delegations\' + $parsedId.ToString() + '.knowledge-mail-delegation.json')
 if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
     throw 'KnowledgeApp C#版のメール委譲情報が見つかりません。C#版から新しいメール委譲番号を作成してください。旧版で発行した委譲は自動移行・探索しません。'
@@ -80,3 +87,5 @@ foreach ($mail in $mails) {
 }
 
 $delegation | ConvertTo-Json -Depth 20
+
+} finally { if ($null -ne $exchange.Lease) { $exchange.Lease.Dispose() } }

@@ -45,6 +45,8 @@ try
             "only initial admin is seeded: no categories, FAQ, or sample users");
         userId = auth.CreateUser("rehearsal-user", "合成永続利用者", password, UserRoles.User).Id;
         auth.ResetUserPassword(admin.Id, password);
+        Check(auth.GetCurrentUser() is null, "own password reset invalidates the old session");
+        auth.Login("0000", password);
         auth.SavePasswordPolicy(new PasswordPolicySettings(false));
         new SettingsService(db, auth, root).SaveSettings(new AppSettings
             { ColorTheme = ColorThemes.Blue, ShowMascot = false, ShowTopCategoryInTitle = false });
@@ -235,7 +237,7 @@ try
     foreach (var version in new[] { 6, 99 })
     {
         var versionRoot = NewRoot(); using (KnowledgeDatabase.OpenRehearsalForTest(versionRoot)) { }
-        ExecuteFixtureSql(versionRoot, version == 6 ? "DELETE FROM schema_migrations WHERE version = 7" :
+        ExecuteFixtureSql(versionRoot, version == 6 ? "DELETE FROM schema_migrations WHERE version >= 7" :
             "INSERT INTO schema_migrations(version, applied_at) VALUES (99, '2099-01-01')");
         ExpectRejectedUnchanged(versionRoot, version == 6 ? "old DB is rejected without automatic migration" : "future DB is rejected without mutation");
     }
@@ -319,7 +321,7 @@ string CreatePolicyBackupFixture(string original, string filesRoot, bool oldSche
     using (var archive = ZipFile.OpenRead(target))
     using (var input = archive.GetEntry("data/knowledge.db")!.Open())
     using (var output = new FileStream(snapshot, FileMode.CreateNew, FileAccess.Write, FileShare.None)) input.CopyTo(output);
-    ExecuteFixtureSql(fixtureRoot, oldSchema ? "DELETE FROM schema_migrations WHERE version = 7" :
+    ExecuteFixtureSql(fixtureRoot, oldSchema ? "DELETE FROM schema_migrations WHERE version >= 7" :
         "UPDATE users SET is_active = 0 WHERE role = 'admin'");
     var bytes = File.ReadAllBytes(snapshot);
     using (var archive = ZipFile.Open(target, ZipArchiveMode.Update))

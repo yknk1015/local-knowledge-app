@@ -1,7 +1,11 @@
+import type { StorageFolder, StorageProbeResult } from "../types/domain";
 import { invoke } from "@tauri-apps/api/core";
 import { hasCSharpBridge, invokeCSharp } from "./csharpBridge";
 import type {
   AppSettings,
+  RecoveryKeyStatus,
+  IssuedRecoveryKey,
+  RecoveryAuthorization,
   AppError,
   Article,
   BackupOverview,
@@ -94,6 +98,13 @@ function bytesToBase64(bytes: number[]): string {
 }
 
 export const knowledgeApi = {
+  getRecoveryKeyStatus: () => call<RecoveryKeyStatus>("get_recovery_key_status"),
+  issueRecoveryKey: (currentPassword: string) => call<IssuedRecoveryKey>("issue_recovery_key", { input: { currentPassword } }),
+  skipRecoverySetup: () => call<RecoveryKeyStatus>("skip_recovery_setup"),
+  verifyRecoveryKey: (loginId: string, key: string) => call<RecoveryAuthorization>("verify_recovery_key", { input: { loginId, key } }),
+  completePasswordRecovery: (token: string, newPassword: string, confirmPassword: string) =>
+    call<IssuedRecoveryKey>("complete_password_recovery", { input: { token, newPassword, confirmPassword } }),
+  cancelPasswordRecovery: () => call<boolean>("cancel_password_recovery"),
   login: (loginId: string, password: string) =>
     call<AuthenticatedUser>("login", { input: { loginId, password } }),
   logout: () => call<void>("logout"),
@@ -101,10 +112,20 @@ export const knowledgeApi = {
   listUsers: () => call<UserSummary[]>("list_users"),
   createUser: (loginId: string, displayName: string, password: string, role: UserRole) =>
     call<UserSummary>("create_user", { input: { loginId, displayName, password, role } }),
+  setUserRole: (id: string, role: UserRole) =>
+    call<UserSummary>("set_user_role", { input: { id, role } }),
   setUserActive: (id: string, isActive: boolean) =>
     call<UserSummary>("set_user_active", { input: { id, isActive } }),
   resetUserPassword: (id: string, password: string) =>
     call<UserSummary>("reset_user_password", { input: { id, password } }),
+  getConnectionSettings: () => call<{ settings: { version: number; url: string; serverId: string } | null; activeShared: boolean }>("get_connection_settings"),
+  saveConnectionSettings: (input: { version: number; url: string; serverId: string } | null) => call("save_connection_settings", { input }),
+  getCodexLocation: () => call<{ root: string; environmentId: string; generation: number }>("get_codex_location"),
+  changeCodexLocation: (path: string | null, invalidateOutstandingDelegations: boolean) => call<{ root: string; generation: number }>("change_codex_location", { input: { path, invalidateOutstandingDelegations } }),
+  getStorageFolders: (server = false) => call<StorageFolder[]>(server ? "get_server_storage_folders" : "get_storage_folders"),
+  selectStorageFolder: (server = false) => call<string | null>(server ? "select_server_backup_folder" : "select_storage_folder"),
+  saveStorageFolder: (purpose: string, path: string | null, server = false) => call<StorageFolder>(server ? "save_server_storage_folder" : "save_storage_folder", { input: { purpose, path } }),
+  checkStorageFolder: (purpose: string, path: string | null, server = false) => call<StorageProbeResult>(server ? "check_server_storage_folder" : "check_storage_folder", { input: { purpose, path } }),
   getSystemInfo: () => call<SystemInfo>("get_system_info"),
   getSettings: () => call<AppSettings>("get_settings"),
   saveSettings: (input: AppSettings) => call<AppSettings>("save_settings", { input }),

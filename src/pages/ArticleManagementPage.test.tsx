@@ -149,3 +149,8 @@ describe("ArticleManagementPage", () => {
     expect(await screen.findByText("「画面が暗い」の統合済み設定を解除しました。")).toBeVisible();
   });
 });
+
+vi.mock("../app/AuthContext", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../app/AuthContext")>(),
+  usePermissions: () => ({ isAdmin: true, canEdit: true }),
+}));

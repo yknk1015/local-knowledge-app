@@ -438,3 +438,8 @@ describe("SearchPage", () => {
     expect(within(screen.getAllByRole("listitem")[0]!).getByRole("heading", { name: "【Windows】重要なFAQ" })).toBeInTheDocument();
   });
 });
+
+vi.mock("../app/AuthContext", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../app/AuthContext")>(),
+  usePermissions: () => ({ isAdmin: true, canEdit: true }),
+}));

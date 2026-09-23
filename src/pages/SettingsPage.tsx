@@ -1,3 +1,7 @@
+import { ConnectionSettingsPanel } from "../components/ConnectionSettingsPanel";
+import { isSharedConnection } from "../utils/connectionMode";
+import { CodexLocationPanel } from "../components/CodexLocationPanel";
+import { StorageSettingsPanel } from "../components/StorageSettingsPanel";
 import { useEffect, useRef, useState } from "react";
 import { selectFullBackupDestination, selectRestoreBackupSource } from "../api/backupDialogs";
 import { hasCSharpBridge } from "../api/csharpBridge";
@@ -5,6 +9,7 @@ import { knowledgeApi, toAppError } from "../api/knowledgeApi";
 import { useAuth } from "../app/AuthContext";
 import { useDisplaySettings } from "../app/ColorTheme";
 import { ErrorState, LoadingState } from "../components/Feedback";
+import { RecoveryKeyPanel } from "../components/RecoveryKeyPanel";
 import { legacyBackupNotice } from "../utils/legacyBackupNotice";
 import type {
   AppError,
@@ -228,6 +233,8 @@ export function SettingsPage() {
         <p>画面表示を選び、データとCodex連携用の保存先を確認できます。バックアップと復元は管理者が操作できます。</p>
       </div>
 
+      {isAdmin && <><RecoveryKeyPanel /><StorageSettingsPanel />{isSharedConnection() && <StorageSettingsPanel server />}{!isSharedConnection() && <CodexLocationPanel />}{hasCSharpBridge() && <ConnectionSettingsPanel />}</>}
+
       <section className="panel appearance-panel" aria-labelledby="appearance-heading">
         <div className="appearance-heading">
           <div>
@@ -429,6 +436,8 @@ export function SettingsPage() {
             <div className="backup-success" role="status">
               <strong>フルバックアップを作成しました</strong>
               <span>{backupResult.destinationPath}</span>
+              {backupResult.serverCopyPath && <small>サーバーの退避先：{backupResult.serverCopyPath}</small>}
+              {backupResult.serverCopyWarning && <p role="alert">{backupResult.serverCopyWarning}</p>}
               <small>FAQ {backupResult.counts.articles}件・{formatBytes(backupResult.totalBytes)}</small>
             </div>
           )}

@@ -45,7 +45,24 @@ internal static class DispatcherTagCheck
             Expect("SYS-001", () => dispatcher.Execute("save_tag", JsonSerializer.SerializeToElement(new { invalid = "input" })));
             Expect("SYS-001", () => dispatcher.Execute("delete_tag", JsonSerializer.SerializeToElement(new { id = 123 })));
             Expect("MIG-001", () => dispatcher.Execute("execute_sql", JsonSerializer.SerializeToElement(new { sql = "synthetic only" })));
+            Expect("SYS-001", () => dispatcher.Execute("issue_recovery_key", JsonSerializer.SerializeToElement(new { input = new { currentPassword = "", userId = "another-user" } })));
+            Expect("SYS-001", () => dispatcher.Execute("verify_recovery_key", JsonSerializer.SerializeToElement(new { input = new { loginId = 123, key = "invalid" } })));
+            var issued = dispatcher.Execute("issue_recovery_key", JsonSerializer.SerializeToElement(new { input = new { currentPassword = "" } })) as IssuedRecoveryKey
+                ?? throw new InvalidOperationException("Recovery issue contract missing");
+            authentication.Logout();
+            Expect("AUTH-002", () => dispatcher.Execute("get_recovery_key_status", JsonSerializer.SerializeToElement(new { })));
+            var authorization = dispatcher.Execute("verify_recovery_key", JsonSerializer.SerializeToElement(new { input = new { loginId = "0000", key = issued.Key } })) as RecoveryAuthorization
+                ?? throw new InvalidOperationException("Recovery verification contract missing");
+            Expect("AUTH-002", () => dispatcher.Execute("list_tags", JsonSerializer.SerializeToElement(new { })));
+            Expect("AUTH-002", () => dispatcher.Execute("get_settings", JsonSerializer.SerializeToElement(new { })));
+            var completed = dispatcher.Execute("complete_password_recovery", JsonSerializer.SerializeToElement(new { input = new {
+                token = authorization.Token, newPassword = "Synthetic-dispatch!", confirmPassword = "Synthetic-dispatch!" } })) as IssuedRecoveryKey;
+            Check(completed is not null && completed.Key != issued.Key && authentication.GetCurrentUser() is null,
+                "Recovery dispatcher rotates key without publishing normal session");
+            Expect("AUTH-001", () => authentication.Login("0000", ""));
+            authentication.Login("0000", "Synthetic-dispatch!");
             Console.WriteLine("PASS: tag commands are wired through the real C# dispatcher; UI/file delegates were never invoked");
+            Console.WriteLine("PASS: recovery dispatcher rejects forged subjects and malformed inputs; recovery alone cannot read tags or settings");
         }
         finally
         {

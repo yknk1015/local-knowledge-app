@@ -1,9 +1,13 @@
+import { hasCSharpBridge } from "../api/csharpBridge";
+import { ConnectionSettingsPanel } from "../components/ConnectionSettingsPanel";
+import { isSharedConnection } from "../utils/connectionMode";
 import { FormEvent, useState } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { toAppError } from "../api/knowledgeApi";
 import { useAuth } from "../app/AuthContext";
 import { ErrorState, LoadingState } from "../components/Feedback";
 import type { AppError } from "../types/domain";
+import { PasswordRecovery } from "../components/PasswordRecovery";
 
 export function LoginPage() {
   const { user, loading, login } = useAuth();
@@ -13,9 +17,11 @@ export function LoginPage() {
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<AppError | null>(null);
+  const [recovering, setRecovering] = useState(false);
 
   if (loading) return <div className="login-page"><LoadingState label="ログイン状態を確認しています…" /></div>;
   if (user) return <Navigate to="/search" replace />;
+  if (recovering) return <main className="login-page"><PasswordRecovery onBack={() => setRecovering(false)} /></main>;
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -38,7 +44,7 @@ export function LoginPage() {
         <div className="login-brand" aria-hidden="true">K</div>
         <span className="eyebrow">KnowledgeApp</span>
         <h1 id="login-title">ログイン</h1>
-        <p>このPCに登録された利用者でログインしてください。</p>
+        <p>{isSharedConnection() ? "共有サーバーに登録された利用者でログインしてください。" : "このPCに登録された利用者でログインしてください。"}</p>
         {error && <ErrorState error={error} />}
         <form onSubmit={submit} className="login-form">
           <label>
@@ -48,11 +54,13 @@ export function LoginPage() {
           <label>
             <span>パスワード</span>
             <input type="password" autoComplete="current-password" maxLength={1024} value={password} onChange={(event) => setPassword(event.target.value)} />
-            <small>初期ユーザー「0000」は、初回登録直後のみパスワード空欄でログインできます。</small>
+            <small>{isSharedConnection() ? "共有利用では空欄のパスワードではログインできません。" : "初期ユーザー「0000」は、初回登録直後のみパスワード空欄でログインできます。"}</small>
           </label>
           <button type="submit" className="button primary" disabled={submitting}>{submitting ? "ログイン中…" : "ログイン"}</button>
         </form>
+        <button type="button" className="button secondary" disabled={submitting} onClick={() => { setPassword(""); setError(null); setRecovering(true); }}>パスワードを忘れた場合</button>
       </section>
+      {hasCSharpBridge() && <ConnectionSettingsPanel />}
     </main>
   );
 }

@@ -42,10 +42,12 @@ internal static class TagMasterCheck
             authentication.Login("0000", string.Empty);
             authentication.CreateUser("tag-editor", "タグ合成一般利用者", "synthetic-tag-password", UserRoles.User);
             var category = classification.CreateCategory("タグ合成検証", string.Empty, null);
-            Check("一般利用者の追加・名称変更・未使用削除", () =>
+            Check("編集者のマスター変更拒否と管理者の追加・名称変更・未使用削除", () =>
             {
                 authentication.Logout();
                 authentication.Login("tag-editor", "synthetic-tag-password");
+                ExpectProblem(() => editing.SaveTag(null, "拒否される合成タグ"), "AUTH-003");
+                authentication.Login("0000", string.Empty);
                 var tag = editing.SaveTag(null, "一般利用者作成");
                 var changed = editing.SaveTag(tag.Id, "一般利用者変更");
                 Assert(changed.Id == tag.Id && changed.Name == "一般利用者変更", "一般利用者の名称変更");
@@ -149,6 +151,7 @@ internal static class TagMasterCheck
             });
             Check("使用中名称変更はID・関連・FAQ監査・本文を維持", () =>
             {
+                authentication.Login("0000", string.Empty);
                 var changed = editing.SaveTag(shared.Id, newName);
                 Assert(changed.Id == shared.Id && changed.Name == newName && changed.UsageCount == 2, "名称変更結果");
                 Assert(Text(path, "SELECT created_at FROM tags WHERE id = $id", shared.Id) == tagCreatedAt, "タグの作成日時維持");
@@ -294,7 +297,7 @@ internal static class TagMasterCheck
                 var tag = reopenedEditing.ListTags().Single(item => item.Id == rollbackTag.Id);
                 Assert(tag.Name == "tagrecoveredmarker" && tag.UsageCount == 2, "確定したタグの永続性");
                 Assert(Search(reopenedSearch, "tagrecoveredmarker").Total == 2, "確定した索引の永続性");
-                Assert(Number(path, "SELECT MAX(version) FROM schema_migrations") == 7, "既存DB版を変更しない");
+                Assert(Number(path, "SELECT MAX(version) FROM schema_migrations") == MigrationCatalog.CurrentVersion, "既存DB版を変更しない");
                 Assert(Text(path, "PRAGMA quick_check") == "ok", "合成DB整合性");
                 Assert(Snapshot(path, "PRAGMA foreign_key_check") == "[]", "合成DB外部キー整合性");
             });

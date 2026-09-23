@@ -37,6 +37,10 @@ public sealed record CodexFaqProposal
 {
     public required uint FormatVersion { get; init; }
     public required string RequestId { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? EnvironmentId { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? ExchangeGeneration { get; init; }
     public string? SeriesId { get; init; }
     public required string CreatedAt { get; init; }
     public string ProposalKind { get; init; } = CodexProposalKinds.Create;

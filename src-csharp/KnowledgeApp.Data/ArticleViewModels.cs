@@ -32,7 +32,8 @@ public sealed record ArticleDetail(
     IReadOnlyList<string> Cautions,
     IReadOnlyList<string> Tags,
     IReadOnlyList<string> SearchTerms,
-    IReadOnlyList<RelatedArticleSummary> RelatedArticles);
+    IReadOnlyList<RelatedArticleSummary> RelatedArticles,
+    long Revision = 1);
 
 public sealed record ArticleMergeInfo(
     string TargetArticleId,

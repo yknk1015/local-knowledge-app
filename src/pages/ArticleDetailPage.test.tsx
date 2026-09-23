@@ -88,3 +88,8 @@ describe("ArticleDetailPage", () => {
     expect(getArticle).toHaveBeenLastCalledWith("article-2");
   });
 });
+
+vi.mock("../app/AuthContext", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../app/AuthContext")>(),
+  usePermissions: () => ({ isAdmin: true, canEdit: true }),
+}));

@@ -67,6 +67,7 @@ describe("release FAQ screen workflow", () => {
       displayName: "確認担当",
       role: "admin",
     });
+    vi.spyOn(knowledgeApi, "getRecoveryKeyStatus").mockResolvedValue({ hasKey: false, needsSetup: false, issuedAt: null });
     vi.spyOn(knowledgeApi, "getSettings").mockResolvedValue({
       colorTheme: "green",
       showTopCategoryInTitle: true,

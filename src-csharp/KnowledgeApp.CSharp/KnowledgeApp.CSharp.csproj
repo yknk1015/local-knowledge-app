@@ -8,8 +8,19 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <PlatformTarget>x64</PlatformTarget>
-    <Version>0.5.0</Version>
+    <Version>0.7.3</Version>
     <Product>KnowledgeApp C#</Product>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(StandaloneExe)' == 'true'">
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <!-- Preserve the existing validated UI/helper paths after runtime extraction. -->
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>false</EnableCompressionInSingleFile>
+    <DebugType>None</DebugType>
+    <DebugSymbols>false</DebugSymbols>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4129.50" />
@@ -35,7 +46,28 @@
   <Target Name="CreateBuildUiManifest" AfterTargets="CopyFilesToOutputDirectory">
     <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\..\scripts\Write-CSharpUiManifest.ps1&quot; -UiDirectory &quot;$(TargetDir)ui&quot; -ManifestPath &quot;$(TargetDir)ui-manifest.json&quot;" />
   </Target>
-  <Target Name="CreatePublishUiManifest" AfterTargets="Publish">
+  <Target Name="CreatePublishUiManifest" AfterTargets="Publish" Condition="'$(StandaloneExe)' != 'true'">
     <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\..\scripts\Write-CSharpUiManifest.ps1&quot; -UiDirectory &quot;$(PublishDir)ui&quot; -ManifestPath &quot;$(PublishDir)ui-manifest.json&quot;" />
+  </Target>
+  <ItemGroup><ProjectReference Include="../KnowledgeApp.PathProbe/KnowledgeApp.PathProbe.csproj" ReferenceOutputAssembly="false" /></ItemGroup>
+  <Target Name="CopyStorageProbeRuntime" AfterTargets="Build;Publish">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)../KnowledgeApp.PathProbe/KnowledgeApp.PathProbe.csproj" Targets="GetTargetPath" Properties="Configuration=$(Configuration)">
+      <Output TaskParameter="TargetOutputs" ItemName="ProbeAssembly" />
+    </MSBuild>
+    <PropertyGroup><ProbeDirectory>@(ProbeAssembly->'%(RootDir)%(Directory)')</ProbeDirectory></PropertyGroup>
+    <ItemGroup><ProbeRuntime Include="$(ProbeDirectory)KnowledgeApp.PathProbe.*" Exclude="$(ProbeDirectory)*.pdb" /></ItemGroup>
+    <Copy SourceFiles="@(ProbeRuntime)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(ProbeRuntime)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" Condition="'$(StandaloneExe)' != 'true' And '$(PublishDir)' != '' And Exists('$(PublishDir)')" />
+  </Target>
+  <Target Name="PrepareStandaloneAssets" BeforeTargets="_GenerateSingleFileBundleInputCache;GenerateSingleFileBundle" DependsOnTargets="PrepareForBundle" Condition="'$(StandaloneExe)' == 'true'">
+    <Error Condition="!Exists('$(StandaloneProbeDirectory)/KnowledgeApp.PathProbe.exe') Or !Exists('$(StandaloneAssetsDirectory)/STANDALONE-README.txt')" Text="Use scripts/New-CSharpStandaloneExe.ps1 to prepare the verified helper and notices." />
+    <ItemGroup>
+      <StandaloneNoticeFiles Include="$(StandaloneAssetsDirectory)/notices/**/*" />
+      <FilesToBundle Remove="@(FilesToBundle)" Condition="'%(FilesToBundle.RelativePath)' == 'KnowledgeApp.PathProbe.exe' Or '%(FilesToBundle.RelativePath)' == 'KnowledgeApp.PathProbe.dll' Or '%(FilesToBundle.RelativePath)' == 'KnowledgeApp.PathProbe.deps.json' Or '%(FilesToBundle.RelativePath)' == 'KnowledgeApp.PathProbe.runtimeconfig.json'" />
+      <FilesToBundle Include="$(TargetDir)ui-manifest.json" RelativePath="ui-manifest.json" />
+      <FilesToBundle Include="$(StandaloneProbeDirectory)/KnowledgeApp.PathProbe.exe" RelativePath="KnowledgeApp.PathProbe.exe" />
+      <FilesToBundle Include="$(StandaloneAssetsDirectory)/STANDALONE-README.txt" RelativePath="STANDALONE-README.txt" />
+      <FilesToBundle Include="@(StandaloneNoticeFiles)" RelativePath="notices/%(StandaloneNoticeFiles.RecursiveDir)%(StandaloneNoticeFiles.Filename)%(StandaloneNoticeFiles.Extension)" />
+    </ItemGroup>
   </Target>
 </Project>

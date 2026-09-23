@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO.Compression;
@@ -75,7 +76,7 @@ internal static class ProductionCheck
         string baseline;
         using (var database = KnowledgeDatabase.OpenProductionForTest(root))
         {
-            Check(!database.OpenInfo.Created && database.OpenInfo.CurrentSchemaVersion == 7, "existing marker-free Tauri-shaped schema 7 is adopted without bootstrap or migration");
+            Check(!database.OpenInfo.Created && database.OpenInfo.PreviousSchemaVersion == 7 && database.OpenInfo.CurrentSchemaVersion == MigrationCatalog.CurrentVersion && database.OpenInfo.MigrationBackupPath is not null, "existing schema 7 migrates after a full safety backup without bootstrap");
             Check(!File.Exists(Path.Combine(root, ProductionDataRoot.InitializedMarker)), "legacy store does not require or silently acquire a C# marker");
             baseline = database.CandidateSafetyBackup!.DestinationPath;
             Check(database.CandidateSafetyBackup.Counts == new BackupCounts(2, 2, 1, 1), "pre-authentication baseline protects FAQ, categories, image and legacy file");
@@ -84,7 +85,18 @@ internal static class ProductionCheck
                 !zip.Entries.Any(entry => entry.FullName.Contains("codex-", StringComparison.Ordinal) || entry.FullName.Contains(".knowledgeapp", StringComparison.Ordinal)),
                 "baseline format retains managed files and excludes bridge files and lifecycle markers");
         }
-        CheckSnapshots(expected, Snapshot(root), "candidate startup preserves every table, auth hash, ID, audit, setting and history before login");
+        // Compare original columns; schema 9 intentionally adds revision, owners and personal settings.
+        using (var migratedConnection = LegacyFixture.Open(DatabasePath(root)))
+        {
+            expected.Remove("schema_migrations"); expected.Remove("app_settings");
+            var oldUsers = expected["users"];
+            expected["users"] = oldUsers with { Rows = oldUsers.Rows.Select(row => JsonSerializer.Serialize(
+                JsonSerializer.Deserialize<JsonElement[]>(row)!.Select((value, index) =>
+                    oldUsers.Columns[index] == "role" && value.GetString() == "user" ? (object)"editor" : value).ToArray())).Order(StringComparer.Ordinal).ToArray() };
+            var migrated = LegacyFixture.Snapshot(migratedConnection, expected);
+            Check(expected.All(table => table.Value.Rows.SequenceEqual(migrated[table.Key].Rows)),
+                "schema 7 migration preserves original IDs, hashes, audits and history; user becomes editor");
+        }
         CheckFiles(root, files, "candidate startup preserves every existing managed file and unknown file");
         Check(Hash(fixture.Archive) == sourceHash, "pre-existing source backup is unchanged");
         using (var database = KnowledgeDatabase.OpenProductionForTest(root))

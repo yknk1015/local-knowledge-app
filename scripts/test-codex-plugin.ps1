@@ -35,6 +35,7 @@ try {
                 throw ('CodexプラグインにDB・履歴・未選択FAQの直接探索につながる処理があります: ' + $scriptFile.Name)
             }
         }
+        if ($scriptFile.Name -eq 'ExchangeLocation.Common.ps1') { continue }
         if ($scriptText -notmatch "(?m)^\`$dataRoot = Join-Path \`$localDataFolder 'jp\.local\.webknowledgesystem\.csharp'\s*$" -or
             $scriptText -notmatch '\[Environment\]::GetFolderPath\(\[Environment\+SpecialFolder\]::LocalApplicationData\)' -or
             $scriptText -match '\$env:LOCALAPPDATA' -or
@@ -225,6 +226,49 @@ try {
     if (-not [Linq.Enumerable]::SequenceEqual([byte[]]$proposalBytes, [byte[]][IO.File]::ReadAllBytes($target))) {
         throw '拒否された操作が既存提案を書き換えました。'
     }
+    # Configured exchange: only owned synthetic JSON, ACL and generation are used.
+    $settingsPath = Join-Path $testRoot 'device-settings'
+    $exchangePath = Join-Path $testRoot 'configured-exchange'
+    [IO.Directory]::CreateDirectory($settingsPath) | Out-Null
+    foreach ($relative in @('codex-inbox', 'codex-bridge')) { [IO.Directory]::CreateDirectory((Join-Path $exchangePath $relative)) | Out-Null }
+    $acl = [Security.AccessControl.DirectorySecurity]::new()
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($sid in @([Security.Principal.WindowsIdentity]::GetCurrent().User, [Security.Principal.SecurityIdentifier]::new('S-1-5-18'), [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))) {
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow'))
+    }
+    Set-Acl -LiteralPath $exchangePath -AclObject $acl
+    $environmentId = [guid]::NewGuid().ToString()
+    $descriptor = @{ version=1; environmentId=$environmentId; generation=2; root=$exchangePath } | ConvertTo-Json
+    $descriptorPath = Join-Path $settingsPath 'codex-location.json'
+    [IO.File]::WriteAllText($descriptorPath, $descriptor, $strictUtf8)
+    [IO.File]::WriteAllText((Join-Path $exchangePath '.knowledgeapp-codex-owner.json'), $descriptor, $strictUtf8)
+    [IO.File]::WriteAllBytes((Join-Path $settingsPath 'codex-location.lock'), [byte[]]@())
+    [IO.File]::WriteAllText((Join-Path $exchangePath 'codex-bridge/categories.json'), $catalog, $strictUtf8)
+    $configured = & (Join-Path $pluginScripts 'get-category-catalog.ps1') -TestDataRoot $testRoot
+    if (($configured -join "`n") -notmatch $environmentId) { throw '連携環境番号が返されませんでした。' }
+    $configuredProposal = $proposal | ConvertFrom-Json
+    $configuredProposal.requestId = [guid]::NewGuid().ToString()
+    $configuredProposal.seriesId = $configuredProposal.requestId
+    $configuredProposal | Add-Member environmentId $environmentId
+    $configuredProposal | Add-Member exchangeGeneration 1
+    $staleRejected = $false
+    try { & (Join-Path $pluginScripts 'submit-faq-proposal.ps1') -TestDataRoot $testRoot -ProposalJson ($configuredProposal | ConvertTo-Json -Depth 20) | Out-Null }
+    catch { $staleRejected = $true }
+    if (-not $staleRejected) { throw '旧世代の提案を拒否しませんでした。' }
+    $configuredProposal.exchangeGeneration = 2
+    & (Join-Path $pluginScripts 'submit-faq-proposal.ps1') -TestDataRoot $testRoot -ProposalJson ($configuredProposal | ConvertTo-Json -Depth 20) | Out-Null
+    if (-not (Test-Path -LiteralPath (Join-Path $exchangePath ('codex-inbox/' + $configuredProposal.requestId + '.knowledge-proposal.json')))) { throw '設定先への提案送信に失敗しました。' }
+    $held = [IO.FileStream]::new((Join-Path $settingsPath 'codex-location.lock'), 'Open', 'ReadWrite', 'None')
+    try {
+        $locked = $false
+        try { & (Join-Path $pluginScripts 'get-category-catalog.ps1') -TestDataRoot $testRoot | Out-Null } catch { $locked = $true }
+        if (-not $locked) { throw '切替中の連携先を使用しました。' }
+    } finally { $held.Dispose() }
+    [IO.Directory]::CreateDirectory((Join-Path $exchangePath '.git')) | Out-Null
+    $gitRejected = $false
+    try { & (Join-Path $pluginScripts 'get-category-catalog.ps1') -TestDataRoot $testRoot | Out-Null } catch { $gitRejected = $true }
+    if (-not $gitRejected) { throw '設定後にGit化された連携先を拒否しませんでした。' }
+    Write-Output 'OK: 設定された専用連携先・ACL・環境/世代・旧世代拒否・切替ロック・Git化後の拒否を確認しました。'
     Write-Output 'OK: C#専用固定保存先、旧版へのフォールバック禁止、任意保存先拒否、DB・原本・未選択FAQ直接探索禁止、画像ルール、分類・FAQ・メール委譲取得と提案送信を確認しました。'
 }
 finally {

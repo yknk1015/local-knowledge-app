@@ -15,7 +15,7 @@ public sealed partial class KnowledgeDatabase
                    article.new_badge_until, article.updated_badge_until, article.is_hidden,
                    merge_relation.target_article_id, merge_target.title, merge_relation.merged_at,
                    article.created_by_user_id, creator.display_name,
-                   article.updated_by_user_id, updater.display_name
+                   article.updated_by_user_id, updater.display_name, article.revision
               FROM articles article
               JOIN categories category ON category.id = article.category_id
               LEFT JOIN article_merge_relations merge_relation
@@ -69,7 +69,7 @@ public sealed partial class KnowledgeDatabase
             reader.GetString(21),
             reader.IsDBNull(11) ? null : reader.GetString(11),
             mergeInfo,
-            [], [], [], [], [], [], [], [], [], []);
+            [], [], [], [], [], [], [], [], [], [], reader.GetInt64(22));
         reader.Close();
 
         var proceduresAndCautions = ReadProceduresAndCautions(id);
@@ -88,7 +88,7 @@ public sealed partial class KnowledgeDatabase
         };
     });
 
-    internal void RecordArticleView(string articleId, string? sourceSearchLogId) => ExecuteLocked(() =>
+    internal void RecordArticleView(string articleId, string? sourceSearchLogId, string? userId = null) => ExecuteLocked(() =>
     {
         using (var article = _connection.CreateCommand())
         {
@@ -102,8 +102,9 @@ public sealed partial class KnowledgeDatabase
         if (!string.IsNullOrWhiteSpace(sourceSearchLogId))
         {
             using var searchLog = _connection.CreateCommand();
-            searchLog.CommandText = "SELECT EXISTS(SELECT 1 FROM search_logs WHERE id = $id)";
+            searchLog.CommandText = "SELECT EXISTS(SELECT 1 FROM search_logs WHERE id = $id AND ($user_id IS NULL OR user_id = $user_id))";
             searchLog.Parameters.AddWithValue("$id", sourceSearchLogId);
+            searchLog.Parameters.AddWithValue("$user_id", (object?)userId ?? DBNull.Value);
             if (Convert.ToInt64(searchLog.ExecuteScalar(), CultureInfo.InvariantCulture) != 1)
             {
                 throw new AppProblemException(new AppProblem(
@@ -115,8 +116,8 @@ public sealed partial class KnowledgeDatabase
 
         using var insert = _connection.CreateCommand();
         insert.CommandText = """
-            INSERT INTO view_logs(id, article_id, source_search_log_id, viewed_at)
-            VALUES ($id, $article_id, $source_search_log_id, $viewed_at)
+            INSERT INTO view_logs(id, article_id, source_search_log_id, viewed_at, user_id)
+            VALUES ($id, $article_id, $source_search_log_id, $viewed_at, $user_id)
             """;
         insert.Parameters.AddWithValue("$id", Guid.CreateVersion7().ToString());
         insert.Parameters.AddWithValue("$article_id", articleId);
@@ -124,6 +125,7 @@ public sealed partial class KnowledgeDatabase
             "$source_search_log_id",
             string.IsNullOrWhiteSpace(sourceSearchLogId) ? DBNull.Value : sourceSearchLogId);
         insert.Parameters.AddWithValue("$viewed_at", UtcNow());
+        insert.Parameters.AddWithValue("$user_id", (object?)userId ?? DBNull.Value);
         insert.ExecuteNonQuery();
     });
 

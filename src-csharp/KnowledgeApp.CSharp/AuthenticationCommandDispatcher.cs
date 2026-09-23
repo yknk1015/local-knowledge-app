@@ -28,6 +28,7 @@ internal sealed class KnowledgeCommandDispatcher
     private readonly Func<string, string?> _selectTransferOpenFile;
     private readonly Action<string> _writeClipboardText;
     private readonly Action<Uri> _openExternalUrl;
+    private readonly Func<string?> _selectStorageFolder;
 
     internal KnowledgeCommandDispatcher(
         AuthenticationService authentication,
@@ -43,7 +44,8 @@ internal sealed class KnowledgeCommandDispatcher
         Func<string, string?> selectTransferSaveFile,
         Func<string, string?> selectTransferOpenFile,
         Action<string> writeClipboardText,
-        Action<Uri> openExternalUrl)
+        Action<Uri> openExternalUrl,
+        Func<string?>? selectStorageFolder = null)
     {
         _authentication = authentication;
         _classificationSearch = classificationSearch;
@@ -59,19 +61,33 @@ internal sealed class KnowledgeCommandDispatcher
         _selectTransferOpenFile = selectTransferOpenFile;
         _writeClipboardText = writeClipboardText;
         _openExternalUrl = openExternalUrl;
+        _selectStorageFolder = selectStorageFolder ?? (() => null);
     }
 
     internal object? Execute(string command, JsonElement arguments) => command switch
     {
         "login" => Login(arguments),
+        "get_recovery_key_status" => _authentication.GetRecoveryKeyStatus(),
+        "issue_recovery_key" => _authentication.IssueRecoveryKey(ReadInput<IssueRecoveryKeyInput>(arguments)),
+        "skip_recovery_setup" => _authentication.SkipRecoverySetup(),
+        "verify_recovery_key" => _authentication.VerifyRecoveryKey(ReadInput<VerifyRecoveryKeyInput>(arguments)),
+        "complete_password_recovery" => _authentication.CompletePasswordRecovery(ReadInput<CompletePasswordRecoveryInput>(arguments)),
+        "cancel_password_recovery" => _authentication.CancelPasswordRecovery(),
         "logout" => Logout(),
         "get_current_user" => _authentication.GetCurrentUser(),
+        "get_codex_location" => _settings.CodexLocation.Get(),
+        "change_codex_location" => _settings.CodexLocation.Change(ReadInput<ChangeCodexLocationInput>(arguments)),
+        "get_storage_folders" => _settings.Storage.GetFolders(),
+        "save_storage_folder" => _settings.Storage.Save(ReadInput<SaveStorageFolderInput>(arguments)),
+        "check_storage_folder" => _settings.Storage.Check(ReadInput<SaveStorageFolderInput>(arguments)),
+        "select_storage_folder" => SelectStorageFolder(),
         "get_system_info" => _settings.GetSystemInfo(),
         "get_settings" => _settings.GetSettings(),
         "save_settings" => _settings.SaveSettings(ReadInput<AppSettings>(arguments)),
         "list_users" => _authentication.ListUsers(),
         "create_user" => CreateUser(arguments),
         "set_user_active" => SetUserActive(arguments),
+        "set_user_role" => SetUserRole(arguments),
         "reset_user_password" => ResetUserPassword(arguments),
         "get_password_policy" => _authentication.GetPasswordPolicy(),
         "save_password_policy" => SavePasswordPolicy(arguments),
@@ -136,6 +152,12 @@ internal sealed class KnowledgeCommandDispatcher
             "現行Tauri版を使用するか、次の移植段階が完了するまでお待ちください。"))
     };
 
+    private string? SelectStorageFolder()
+    {
+        _authentication.RequireAdmin();
+        return _selectStorageFolder();
+    }
+
     private object? RejectCodexProposal(JsonElement arguments)
     {
         _codex.RejectProposal(ReadDirectString(arguments, "requestId"));
@@ -169,6 +191,14 @@ internal sealed class KnowledgeCommandDispatcher
             input.Password ?? string.Empty,
             input.Role);
     }
+
+    private UserSummary SetUserRole(JsonElement arguments)
+    {
+        var input = ReadInput<SetUserRoleInput>(arguments);
+        return _authentication.SetUserRole(input.Id, input.Role);
+    }
+
+    private sealed record SetUserRoleInput(string Id, string Role);
 
     private UserSummary SetUserActive(JsonElement arguments)
     {
@@ -256,7 +286,7 @@ internal sealed class KnowledgeCommandDispatcher
 
     private StagedArticleImage? SelectArticleImage()
     {
-        _authentication.RequireUser();
+        _authentication.RequireEditor();
         var selected = _selectArticleImage();
         return string.IsNullOrWhiteSpace(selected) ? null : _articleEditing.StageArticleImage(selected);
     }
@@ -306,7 +336,7 @@ internal sealed class KnowledgeCommandDispatcher
 
     private string? SelectTransferSaveFile(string kind, JsonElement arguments)
     {
-        _authentication.RequireUser();
+        _authentication.RequireAdmin();
         var defaultName = ReadDirectString(arguments, "defaultName");
         if (defaultName.Length is < 1 or > 200 ||
             defaultName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ||
@@ -322,7 +352,7 @@ internal sealed class KnowledgeCommandDispatcher
 
     private string? SelectTransferOpenFile(string kind)
     {
-        _authentication.RequireUser();
+        _authentication.RequireAdmin();
         return _selectTransferOpenFile(kind);
     }
 

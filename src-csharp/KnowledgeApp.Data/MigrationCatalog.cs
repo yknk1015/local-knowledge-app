@@ -5,7 +5,7 @@ namespace KnowledgeApp.Data;
 
 internal static class MigrationCatalog
 {
-    internal const int CurrentVersion = 7;
+    internal const int CurrentVersion = 9;
 
     internal static string Load(int version)
     {

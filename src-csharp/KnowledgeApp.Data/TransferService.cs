@@ -18,21 +18,21 @@ public sealed class TransferService
 
     public CsvExportResult ExportFaqCsv(ExportFaqCsvInput input)
     {
-        _authentication.RequireUser();
+        _authentication.RequireAdmin();
         var destination = TransferPathValidator.ValidateCsv(input.DestinationPath, mustExist: false);
         return _database.ExportFaqCsv(destination);
     }
 
     public CsvImportPreview InspectFaqCsv(string path)
     {
-        _authentication.RequireUser();
+        _authentication.RequireAdmin();
         var source = TransferPathValidator.ValidateCsv(path, mustExist: true);
         return _database.InspectFaqCsv(source);
     }
 
     public CsvImportResult ImportFaqCsv(ImportFaqCsvInput input)
     {
-        var actor = _authentication.RequireUser();
+        var actor = _authentication.RequireAdmin();
         var source = TransferPathValidator.ValidateCsv(input.SourcePath, mustExist: true);
         var preview = _database.InspectFaqCsv(source);
         EnsureCsvCanImport(preview, input.ExpectedFileSha256);
@@ -42,21 +42,21 @@ public sealed class TransferService
 
     public JsonExportResult ExportJson(ExportJsonInput input)
     {
-        _authentication.RequireUser();
+        _authentication.RequireAdmin();
         var destination = TransferPathValidator.ValidateJson(input.DestinationPath, mustExist: false);
         return _database.ExportJson(destination);
     }
 
     public JsonImportPreview InspectJson(string path)
     {
-        _authentication.RequireUser();
+        _authentication.RequireAdmin();
         var source = TransferPathValidator.ValidateJson(path, mustExist: true);
         return _database.InspectJson(source);
     }
 
     public JsonImportResult ImportJson(ImportJsonInput input)
     {
-        var actor = _authentication.RequireUser();
+        var actor = _authentication.RequireAdmin();
         var source = TransferPathValidator.ValidateJson(input.SourcePath, mustExist: true);
         var preview = _database.InspectJson(source);
         EnsureJsonCanImport(preview, input.ExpectedFileSha256);

@@ -10,7 +10,7 @@ export function UsersPage() {
   const [loginId, setLoginId] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState<UserRole>("user");
+  const [role, setRole] = useState<UserRole>("viewer");
   const [allowEmptyPasswords, setAllowEmptyPasswords] = useState(true);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -43,7 +43,7 @@ export function UsersPage() {
     setBusy(true); setError(null); setNotice(null);
     try {
       await knowledgeApi.createUser(loginId, displayName, password, role);
-      setLoginId(""); setDisplayName(""); setPassword(""); setRole("user");
+      setLoginId(""); setDisplayName(""); setPassword(""); setRole("viewer");
       setNotice("利用者を追加しました。");
       await load();
     } catch (caught) { setError(toAppError(caught)); }
@@ -123,7 +123,7 @@ export function UsersPage() {
         <label><span>ログインID</span><input required maxLength={100} value={loginId} onChange={(event) => setLoginId(event.target.value)} /></label>
         <label><span>表示名</span><input required maxLength={100} value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></label>
         <label><span>初期パスワード</span><input type="password" required={!allowEmptyPasswords} maxLength={1024} value={password} onChange={(event) => setPassword(event.target.value)} /></label>
-        <label><span>権限</span><select value={role} onChange={(event) => setRole(event.target.value as UserRole)}><option value="user">一般利用者</option><option value="admin">管理者</option></select></label>
+        <label><span>権限</span><select value={role} onChange={(event) => setRole(event.target.value as UserRole)}><option value="viewer">閲覧のみ</option><option value="editor">FAQ編集者</option><option value="admin">管理者</option></select></label>
         <button type="submit" className="button primary" disabled={busy}>追加する</button>
       </form>
       {notice && <div className="success-notice" role="status">{notice}</div>}
@@ -137,7 +137,15 @@ export function UsersPage() {
             <tbody>{users.map((target) => (
               <tr key={target.id}>
                 <td><strong>{target.displayName}</strong><small className="table-subline">ID: {target.loginId}</small></td>
-                <td>{target.role === "admin" ? "管理者" : "一般利用者"}</td>
+                <td><select aria-label={`${target.displayName}の権限`} value={target.role} disabled={busy}
+                  onChange={async (event) => {
+                    const nextRole = event.target.value as UserRole;
+                    if (!window.confirm(`${target.displayName}の権限を変更しますか？変更後は再ログインが必要です。`)) return;
+                    setBusy(true); setError(null);
+                    try { await knowledgeApi.setUserRole(target.id, nextRole); await load(); }
+                    catch (caught) { setError(toAppError(caught)); }
+                    finally { setBusy(false); }
+                  }}><option value="admin">管理者</option><option value="editor">FAQ編集者</option><option value="viewer">閲覧のみ</option></select></td>
                 <td><span className={`status-badge ${target.isActive ? "published" : "archived"}`}>{target.isActive ? "利用中" : "利用停止"}</span></td>
                 <td>{target.lastLoginAt ? new Date(target.lastLoginAt).toLocaleString("ja-JP") : "未ログイン"}</td>
                 <td className="management-row-actions">
@@ -160,6 +168,8 @@ export function UsersPage() {
             <span className="eyebrow">利用者の認証情報</span>
             <h2 id="password-reset-title">{passwordResetTarget.displayName}のパスワード再設定</h2>
             <p>入力間違いを防ぐため、新しいパスワードを2回入力してください。</p>
+            {passwordResetTarget.role === "admin" && <p>この管理者の復旧キーは無効になります。変更後に「設定・情報」で再発行してください。</p>}
+            {passwordResetTarget.id === currentUser?.id && <p>ご自身の変更後はログアウトします。新しいパスワードでログインしてください。</p>}
             <form onSubmit={(event) => void resetPassword(event)}>
               <label>
                 <span>新しいパスワード</span>

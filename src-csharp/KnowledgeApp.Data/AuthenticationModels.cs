@@ -3,9 +3,12 @@ namespace KnowledgeApp.Data;
 public static class UserRoles
 {
     public const string Admin = "admin";
-    public const string User = "user";
+    public const string Editor = "editor";
+    public const string Viewer = "viewer";
+    // Source compatibility for synthetic legacy callers; stored roles use editor.
+    public const string User = Editor;
 
-    public static bool IsValid(string role) => role is Admin or User;
+    public static bool IsValid(string role) => role is Admin or Editor or Viewer;
 }
 
 public sealed record AuthenticatedUser(

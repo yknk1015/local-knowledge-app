@@ -24,7 +24,7 @@ try
         return 0;
     }
 
-    for (var version = 1; version <= MigrationCatalog.CurrentVersion; version++) RunValid(LegacyFixture.Create(NewRoot(), version));
+    for (var version = 1; version < MigrationCatalog.CurrentVersion; version++) RunValid(LegacyFixture.Create(NewRoot(), version));
     RunValid(LegacyFixture.Create(NewRoot(), 6, emptyV6: true));
     RunValid(LegacyFixture.Create(NewRoot(), 6, initialAdminWithNullAudits: true, caseLabel: "existing initial administrator fills only NULL audits"));
     var longText = new string('あ', 100_001);
@@ -147,7 +147,7 @@ void RunValid(LegacyFixture fixture)
             Check(LegacyFixture.Scalar(safety, "SELECT name FROM categories") == "復元前の合成分類", label + " safety archive holds the actual prior state");
         }
         Check(Hash(fixture.Archive) == archiveHash && Hash(Path.Combine(target, RehearsalDataRoot.InitializedMarker)) == markerHash, label + " restore never edits selected archive or lifecycle marker");
-        Check(db.SchemaVersionForTest() == 7 && db.QuickCheckForTest() == "ok", label + " restored staged DB is schema7 and passes quick_check");
+        Check(db.SchemaVersionForTest() == MigrationCatalog.CurrentVersion && db.QuickCheckForTest() == "ok", label + " restored staged DB is current schema and passes quick_check");
         using (var connection = LegacyFixture.Open(db.OpenInfo.DatabasePath))
         {
             var shape = fixture.Before.ToDictionary(item => item.Key, item => item.Value);
@@ -166,8 +166,12 @@ void RunValid(LegacyFixture fixture)
                         value.ValueKind == JsonValueKind.Null && old.Columns[index] is "created_by_user_id" or "updated_by_user_id"
                             ? (object)KnowledgeDatabase.InitialAdminUserId : value).ToArray())).Order(StringComparer.Ordinal).ToArray() };
             }
+            if (shape.TryGetValue("users", out var usersBefore))
+                shape["users"] = usersBefore with { Rows = usersBefore.Rows.Select(row => JsonSerializer.Serialize(
+                    JsonSerializer.Deserialize<JsonElement[]>(row)!.Select((value, index) =>
+                        usersBefore.Columns[index] == "role" && value.GetString() == "user" ? (object)"editor" : value).ToArray())).Order(StringComparer.Ordinal).ToArray() };
             var actual = LegacyFixture.Snapshot(connection, shape);
-            foreach (var table in shape) Check(table.Value.Rows.SequenceEqual(actual[table.Key].Rows), label + " preserves original columns/rows: " + table.Key);
+            foreach (var table in shape) Check(table.Key == "app_settings" ? table.Value.Rows.All(row => actual[table.Key].Rows.Contains(row)) : table.Value.Rows.SequenceEqual(actual[table.Key].Rows), label + " preserves original columns/rows: " + table.Key);
             var expectedAdmin = fixture.Bootstrap ? KnowledgeDatabase.InitialAdminUserId : fixture.ExistingAdminId;
             Check(LegacyFixture.Scalar(connection, "SELECT COUNT(*) FROM users") == (fixture.Bootstrap ? "1" : "2"), label + " seeds only genuine pre-auth archives; existing users are preserved");
             Check(LegacyFixture.Scalar(connection, "SELECT created_by_user_id FROM articles WHERE id='" + LegacyFixture.ArticleId + "'") == expectedAdmin &&

@@ -1,0 +1,10 @@
+.recovery-panel { padding: 1.5rem; max-width: 46rem; }
+.recovery-panel p { line-height: 1.7; overflow-wrap: anywhere; }
+.recovery-panel h2, .recovery-panel h3 { margin-top: 0; }
+.recovery-actions { display: flex; flex-wrap: wrap; gap: .75rem; }
+.recovery-key { font-family: monospace; font-size: clamp(1rem, 3vw, 1.5rem); letter-spacing: .04em; width: 100%; }
+.recovery-result { display: grid; gap: 1rem; }
+.recovery-result label { display: grid; gap: .5rem; }
+.recovery-result .recovery-saved { display: flex; align-items: flex-start; gap: .6rem; }
+.recovery-saved input { width: auto; margin-top: .3rem; flex-shrink: 0; }
+.recovery-panel .button { white-space: normal; }

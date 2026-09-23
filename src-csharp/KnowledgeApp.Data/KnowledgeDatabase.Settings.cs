@@ -13,12 +13,17 @@ public sealed partial class KnowledgeDatabase
         UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow
     };
 
-    internal AppSettings GetAppearanceSettings() => ExecuteLocked(() =>
+    internal AppSettings GetAppearanceSettings(string? userId = null) => ExecuteLocked(() =>
     {
         using var command = _connection.CreateCommand();
         command.CommandText = "SELECT value_json FROM app_settings WHERE key = $key";
-        command.Parameters.AddWithValue("$key", AppearanceSettingsKey);
+        command.Parameters.AddWithValue("$key", userId is null ? AppearanceSettingsKey : $"appearance:{userId}");
         var stored = command.ExecuteScalar() as string;
+        if (stored is null && userId == InitialAdminUserId)
+        {
+            command.Parameters["$key"].Value = AppearanceSettingsKey;
+            stored = command.ExecuteScalar() as string;
+        }
         if (stored is null)
         {
             return new AppSettings();
@@ -39,7 +44,7 @@ public sealed partial class KnowledgeDatabase
         }
     });
 
-    internal AppSettings SaveAppearanceSettings(AppSettings settings) => ExecuteLocked(() =>
+    internal AppSettings SaveAppearanceSettings(AppSettings settings, string? userId = null) => ExecuteLocked(() =>
     {
         ValidateAppearanceSettings(settings, "SET-002");
         string value;
@@ -62,7 +67,7 @@ public sealed partial class KnowledgeDatabase
                 value_json = excluded.value_json,
                 updated_at = excluded.updated_at
             """;
-        command.Parameters.AddWithValue("$key", AppearanceSettingsKey);
+        command.Parameters.AddWithValue("$key", userId is null ? AppearanceSettingsKey : $"appearance:{userId}");
         command.Parameters.AddWithValue("$value", value);
         command.Parameters.AddWithValue(
             "$updated_at",

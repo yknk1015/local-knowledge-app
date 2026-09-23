@@ -6,6 +6,14 @@ public sealed partial class KnowledgeDatabase
 {
     // No caller-supplied path is accepted. This root is permanently separate
     // from Tauri: existing data enters only through an explicitly selected backup.
+    public static KnowledgeDatabase OpenShared()
+    {
+        var db = OpenProductionAt(SharedDataRoot.Validate(SharedDataRoot.FixedPath));
+        db.SharedMode = true;
+        db.SavePasswordPolicy(new(false));
+        return db;
+    }
+
     public static KnowledgeDatabase OpenProduction() =>
         OpenProductionAt(ProductionDataRoot.ValidateFixedPath(ProductionDataRoot.FixedPath));
 

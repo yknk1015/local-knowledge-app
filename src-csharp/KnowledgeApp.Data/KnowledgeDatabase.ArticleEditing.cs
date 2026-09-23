@@ -41,6 +41,16 @@ public sealed partial class KnowledgeDatabase
         if (!isNew)
         {
             EnsureEditableArticle(transaction, articleId);
+            using (var version = _connection.CreateCommand())
+            {
+                version.Transaction = transaction;
+                version.CommandText = "SELECT revision FROM articles WHERE id = $id";
+                version.Parameters.AddWithValue("$id", articleId);
+                var revision = Convert.ToInt64(version.ExecuteScalar(), CultureInfo.InvariantCulture);
+                if ((SharedMode && input.ExpectedRevision is null) ||
+                    (input.ExpectedRevision is not null && revision != input.ExpectedRevision))
+                    throw new AppProblemException(new AppProblem("ART-010", "別の利用者または処理がこのFAQを更新しています。入力内容は保存されていません。", "入力内容を控え、最新のFAQを開き直して変更点を確認してください。"));
+            }
             EnsureMergeTargetVisibility(transaction, articleId, input.Status, input.IsHidden);
             if (input.Status == ArticleStatuses.Published && string.IsNullOrWhiteSpace(input.NewBadgeUntil) &&
                 RequiresNewBadgeForMergePublication(articleId, transaction))

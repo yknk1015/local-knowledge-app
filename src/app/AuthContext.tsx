@@ -49,6 +49,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
+export function usePermissions() {
+  const value = useContext(AuthContext);
+  const role = value?.user?.role;
+  return { isAdmin: role === "admin", canEdit: role === "admin" || role === "editor" };
+}
+
 export function useAuth() {
   const value = useContext(AuthContext);
   if (!value) throw new Error("AuthProviderの内側でuseAuthを使用してください。");

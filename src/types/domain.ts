@@ -1,5 +1,8 @@
 export type ArticleStatus = "draft" | "published" | "archived";
-export type UserRole = "admin" | "user";
+export interface StorageFolder { purpose: string; customPath: string | null; effectivePath: string; mode: string; }
+export interface StorageProbeResult { path: string; writable: boolean; availableBytes: number | null; }
+
+export type UserRole = "admin" | "editor" | "viewer";
 
 export interface AuthenticatedUser {
   id: string;
@@ -125,6 +128,7 @@ export interface ArticleListItem {
 }
 
 export interface Article extends ArticleListItem {
+  revision?: number;
   bodyDoc: Record<string, unknown>;
   bodyPlainText: string;
   createdAt: string;
@@ -196,6 +200,7 @@ export interface StagedArticleImage {
 }
 
 export interface SaveArticleInput {
+  expectedRevision?: number;
   id?: string;
   categoryId: string;
   title: string;
@@ -412,6 +417,8 @@ export interface BackupPreview {
 }
 
 export interface BackupResult {
+  serverCopyPath?: string;
+  serverCopyWarning?: string;
   destinationPath: string;
   displayName: string;
   createdAt: string;
@@ -431,3 +438,10 @@ export interface AppError {
   message: string;
   action: string;
 }
+export interface RecoveryKeyStatus {
+  hasKey: boolean;
+  needsSetup: boolean;
+  issuedAt: string | null;
+}
+export interface IssuedRecoveryKey { key: string }
+export interface RecoveryAuthorization { token: string; expiresAt: string }

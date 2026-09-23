@@ -8,7 +8,6 @@ namespace KnowledgeApp.Data;
 public sealed partial class KnowledgeDatabase : IDisposable
 {
     internal const string InitialAdminUserId = "00000000-0000-7000-8000-000000000000";
-    private const string InitialAdminEmergencyPasswordHash = "$argon2id$v=19$m=19456,t=2,p=1$7SMc0zDN7fMmSfQcwgksbA$UB2H8zEmUGOAzJ7IuOCUwcpv4cs+UisQu9eXoryc61c";
     private const string PasswordPolicyKey = "password_policy";
     private static readonly JsonSerializerOptions SettingsJsonOptions = new()
     {
@@ -28,6 +27,9 @@ public sealed partial class KnowledgeDatabase : IDisposable
     }
 
     public SyntheticDatabaseOpenInfo OpenInfo { get; }
+    public bool SharedMode { get; internal set; }
+    internal object OperationSync => _sync;
+    internal T InOperation<T>(Func<T> action) => ExecuteLocked(action);
 
     public static KnowledgeDatabase OpenSynthetic(string dataRoot)
     {
@@ -104,11 +106,20 @@ public sealed partial class KnowledgeDatabase : IDisposable
             if (exclusive) AcquireExclusiveDatabase(connection);
 
             var previousVersion = existed ? ValidateExisting(connection) : 0;
-            if (persistent && !initializing) RequireCurrentRehearsalVersion(previousVersion);
+            if (persistent && !initializing && previousVersion < 7) RequireCurrentRehearsalVersion(previousVersion);
             string? backupPath = null;
             if (previousVersion is > 0 and < MigrationCatalog.CurrentVersion)
             {
-                backupPath = CreateMigrationBackup(connection, backupDirectory, previousVersion);
+                if (persistent)
+                {
+                    FileSystemBoundary.CreateManagedDirectory(root, backupDirectory);
+                    var migrationName = $"KnowledgeApp_before_schema_{previousVersion}_{Guid.NewGuid():N}";
+                    var migrationHost = new KnowledgeDatabase(connection,
+                        new(databasePath, previousVersion, previousVersion, false, null), persistent);
+                    backupPath = migrationHost.CreateFullBackupUnlocked(root,
+                        new(Path.Combine(backupDirectory, migrationName + ".faqbackup"), migrationName, false), false).DestinationPath;
+                }
+                else backupPath = CreateMigrationBackup(connection, backupDirectory, previousVersion);
             }
 
             if (previousVersion == 0)
@@ -163,7 +174,7 @@ public sealed partial class KnowledgeDatabase : IDisposable
 
     internal AuthenticatedUser Authenticate(string loginId, string password)
     {
-        if (CountRunes(loginId) > 100 || CountRunes(password) > 1024)
+        if (CountRunes(loginId) > 100 || CountRunes(password) > 1024 || (SharedMode && string.IsNullOrEmpty(password)))
         {
             throw new AppProblemException(AppProblem.Authentication());
         }
@@ -187,8 +198,7 @@ public sealed partial class KnowledgeDatabase : IDisposable
             var id = reader.GetString(0);
             var storedHash = reader.GetString(3);
             var role = ValidateRole(reader.GetString(4));
-            if (!Argon2PasswordCodec.Verify(password, storedHash) &&
-                !(id == InitialAdminUserId && Argon2PasswordCodec.Verify(password, InitialAdminEmergencyPasswordHash)))
+            if (!Argon2PasswordCodec.Verify(password, storedHash))
             {
                 throw new AppProblemException(AppProblem.Authentication());
             }
@@ -350,6 +360,7 @@ public sealed partial class KnowledgeDatabase : IDisposable
 
     internal PasswordPolicySettings SavePasswordPolicy(PasswordPolicySettings settings) => ExecuteLocked(() =>
     {
+        if (SharedMode && settings.AllowEmptyPasswords) throw UserInputProblem("共有利用では空パスワードを許可できません。", "パスワードを設定してください。");
         string json;
         try
         {
@@ -503,8 +514,10 @@ public sealed partial class KnowledgeDatabase : IDisposable
         }
         catch (SqliteException)
         {
+            try { ExecuteNonQuery(connection, "ROLLBACK;"); } catch (SqliteException) { }
             throw new AppProblemException(AppProblem.Database("FAQデータの更新に失敗しました。"));
         }
+        finally { if (version == 9) ExecuteNonQuery(connection, "PRAGMA foreign_keys = ON;"); }
     }
 
     private static void EnsureInitialAdmin(SqliteConnection connection)
@@ -542,7 +555,7 @@ public sealed partial class KnowledgeDatabase : IDisposable
         audit.ExecuteNonQuery();
     }
 
-    private static void ValidatePersistentUsers(SqliteConnection connection)
+    private static void ValidatePersistentUsers(SqliteConnection connection, bool withRecovery = true)
     {
         // Reject incomplete schemas bearing a current version number instead of
         // opening a partly usable UI and discovering missing tables during edits.
@@ -566,6 +579,8 @@ public sealed partial class KnowledgeDatabase : IDisposable
         foreignKeys.CommandText = "PRAGMA foreign_key_check";
         using var reader = foreignKeys.ExecuteReader();
         if (reader.Read()) throw RehearsalDataRoot.Problem();
+        reader.Close();
+        if (withRecovery) ValidateRecoveryRecords(connection);
     }
 
     private static void RequireCurrentRehearsalVersion(int version)
@@ -609,9 +624,11 @@ public sealed partial class KnowledgeDatabase : IDisposable
             }.ToString());
             preflight.Open();
             var version = ValidateExisting(preflight);
-            RequireCurrentRehearsalVersion(version);
-            ValidatePersistentUsers(preflight);
+            if (version < 7) RequireCurrentRehearsalVersion(version);
+            ValidateRequiredBackupSchema(preflight, version);
+            ValidatePersistentUsers(preflight, version >= 8);
         }
+        catch (AppProblemException exception) when (exception.Problem.Code == "BK-006") { throw RehearsalDataRoot.Problem(); }
         catch (SqliteException) { throw RehearsalDataRoot.Problem(); }
         finally
         {

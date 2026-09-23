@@ -1,11 +1,12 @@
 {
   "name": "web-knowledge-system",
   "private": true,
-  "version": "0.5.0",
+  "version": "0.7.3",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:exe": "pwsh -NoProfile -File ./scripts/Build-CSharpStandaloneExe.ps1",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest"

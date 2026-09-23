@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param()
+param([string]$OutputDirectory)
 
 . (Join-Path $PSScriptRoot 'CSharpTrialPackage.Common.ps1')
 $repositoryRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
@@ -7,7 +7,8 @@ $projectRoot = Join-Path $repositoryRoot 'src-csharp/KnowledgeApp.CSharp'
 $sourceUi = Join-Path $repositoryRoot 'dist'
 Assert-CSharpPackageNormalPath $sourceUi
 if (-not (Test-Path -LiteralPath (Join-Path $sourceUi 'index.html') -PathType Leaf)) { throw 'Run npm run build first.' }
-$taskRoot = Join-Path $projectRoot ('bin/pkg-' + [Guid]::NewGuid().ToString('N').Substring(0, 12))
+$taskRoot = if ($OutputDirectory) { [IO.Path]::GetFullPath($OutputDirectory) }
+    else { Join-Path $projectRoot ('bin/pkg-' + [Guid]::NewGuid().ToString('N').Substring(0, 12)) }
 Assert-CSharpPackageNormalPath $taskRoot
 if (Test-Path -LiteralPath $taskRoot) { throw 'Refusing to overwrite an existing package directory.' }
 [IO.Directory]::CreateDirectory($taskRoot) | Out-Null
@@ -103,11 +104,11 @@ foreach ($entry in $lock.packages.PSObject.Properties) {
 }
 Write-PackageText 'notices/dependency-inventory.json' ([ordered]@{scope='Local restored NuGet and non-development npm lockfile dependencies; incomplete license text coverage requires release review.'; nuget=@($nuget); npm=@($npm)} | ConvertTo-Json -Depth 8)
 $trialReadme = @'
-KnowledgeApp C# 0.5.0 - production release - phase 17
+KnowledgeApp C# 0.7.3 - production release - phase 17
 
 Windows 11 x64. This is a framework-dependent portable package, not an installer.
 Prerequisites: Microsoft .NET 10 Desktop Runtime (x64) and Microsoft Edge WebView2 Runtime.
-No runtime is downloaded or installed automatically. Follow your company policy.
+No runtime is downloaded or installed automatically. Follow the policies of your operating environment.
 Extract the complete package to a local folder and run KnowledgeApp.CSharp.exe.
 The adjacent ui folder and ui-manifest.json are mandatory; moving only the exe is unsupported.
 The source repository, Node.js and npm are not required to run this package.
@@ -117,7 +118,7 @@ Production data root: %LOCALAPPDATA%\jp.local.webknowledgesystem.csharp
 First launch starts with no FAQ or proposal seeds. Initial login: 0000 with a blank password.
 Normal shutdown retains the database, images, settings, history, import/export state and Codex state.
 Every launch requires login; login sessions and open FAQ tabs are not restored.
-Legacy backups with database schema 1 through 7 are verified and migrated in staging before restore.
+Legacy backups with database schema 1 through 8 are verified and migrated in staging before restore.
 Restore requires a single-use confirmation bound to the login session, selected path and archive SHA-256; it expires after 10 minutes.
 Article JSON supports depth 128; the C# request transport still has a 16 MiB limit.
 Codex JSON supports at most 127 nested object/array containers, including the root; existing file size limits remain unchanged.
@@ -141,7 +142,7 @@ No process is killed and no lock is forcibly removed. Activation from a differen
 
 PACKAGE-MANIFEST.json records file SHA-256 hashes for consistency checks, not authenticity or signing.
 Dependency metadata and locally available notices are under notices. This is not legal approval.
-Release authorization does not mean every final test, company-device check, installed-plugin interaction or code-signing review has passed.
+Release authorization does not mean every final test, target-device check, installed-plugin interaction or code-signing review has passed.
 Review the final migration record for remaining verification. Company policy still governs installation and data sharing.
 '@
 # Windows PowerShell 5.1 parses BOM-less scripts using the system code page.
@@ -154,7 +155,7 @@ $packageManifest = Get-CSharpTrialPackageMetadata
 $packageManifest.files = $entries
 Write-PackageText 'PACKAGE-MANIFEST.json' ($packageManifest | ConvertTo-Json -Depth 6)
 $verified = Test-CSharpTrialPackage $packageRoot $sourceUi
-$zip = Join-Path $taskRoot 'KnowledgeApp-CSharp-0.5.0-win-x64.zip'
+$zip = Join-Path $taskRoot 'KnowledgeApp-CSharp-0.7.3-win-x64.zip'
 if (Test-Path -LiteralPath $zip) { throw 'Refusing to overwrite an archive.' }
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 [IO.Compression.ZipFile]::CreateFromDirectory($packageRoot, $zip, [IO.Compression.CompressionLevel]::Optimal, $false)

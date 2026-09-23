@@ -22,6 +22,13 @@ if ($TestDataRoot) {
     }
     $dataRoot = $resolvedTestRoot
 }
+. ([scriptblock]::Create([IO.File]::ReadAllText((Join-Path $PSScriptRoot 'ExchangeLocation.Common.ps1'), [Text.UTF8Encoding]::new($false, $true))))
+$exchange = Open-KnowledgeExchange $dataRoot
+$dataRoot = $exchange.Root
+try {
+if ($exchange.Generation -gt 0) {
+    Write-Output ('連携環境 environmentId: ' + $exchange.EnvironmentId + ' / exchangeGeneration: ' + $exchange.Generation + '。提案JSONのルートへこの2項目を含めてください。')
+}
 $catalogPath = Join-Path $dataRoot 'codex-bridge\categories.json'
 if (-not (Test-Path -LiteralPath $catalogPath -PathType Leaf)) {
     throw 'KnowledgeApp C#版の分類カタログがありません。C#版を一度起動し、「Codexからの提案」で提案を更新してください。旧版の保存先は探索しません。'
@@ -33,3 +40,5 @@ if ($catalog.formatVersion -ne 1 -or $null -eq $catalog.categories) {
 }
 
 $catalog | ConvertTo-Json -Depth 20
+
+} finally { if ($null -ne $exchange.Lease) { $exchange.Lease.Dispose() } }

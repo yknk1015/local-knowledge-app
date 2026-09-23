@@ -12,14 +12,16 @@ public sealed class CodexProposalFiles
     public const string DelegationSuffix = ".knowledge-delegation.json";
     public const int MaximumProposalBytes = 1024 * 1024;
     public const int MaximumDelegationBytes = 5 * 1024 * 1024;
-    private readonly string _root;
+    private readonly string _dataRoot;
+    private readonly Func<CodexLocation>? _locationProvider;
+    private CodexLocation Location => _locationProvider?.Invoke() ?? CodexLocationService.Read(_dataRoot);
+    private string _root => Location.Root;
 
-    public CodexProposalFiles(KnowledgeDatabase database)
+    public CodexProposalFiles(KnowledgeDatabase database, Func<CodexLocation>? locationProvider = null)
     {
-        _root = Directory.GetParent(Path.GetDirectoryName(database.OpenInfo.DatabasePath)!)!.FullName;
-        InboxPath = Path.Combine(_root, "codex-inbox");
-        CategoryCatalogPath = Path.Combine(_root, "codex-bridge", "categories.json");
-        DelegationsPath = Path.Combine(_root, "codex-bridge", "delegations");
+        _dataRoot = Directory.GetParent(Path.GetDirectoryName(database.OpenInfo.DatabasePath)!)!.FullName;
+        _locationProvider = locationProvider;
+        if (locationProvider is not null) return;
         try
         {
             EnsureDirectory(InboxPath);
@@ -31,18 +33,42 @@ public sealed class CodexProposalFiles
         }
     }
 
-    public string InboxPath { get; }
-    public string CategoryCatalogPath { get; }
-    public string DelegationsPath { get; }
+    public void StoreIncoming(byte[] bytes)
+    {
+        if (bytes.Length > MaximumProposalBytes) throw InvalidProposal("提案は1MB以内にしてください。");
+        RejectDuplicateProperties(bytes);
+        var proposal = JsonSerializer.Deserialize<CodexFaqProposal>(bytes, CodexJson.Options) ?? throw new JsonException();
+        ValidateProposal(proposal);
+        var location = Location;
+        if (proposal.EnvironmentId != location.EnvironmentId || proposal.ExchangeGeneration != location.Generation)
+            throw CodexLocationService.Problem("連携環境・世代が一致しません。依頼を確認してください。");
+        ValidateDelegatedSources(proposal);
+        var destination = Path.Combine(InboxPath, proposal.RequestId + ProposalSuffix);
+        if (File.Exists(FileSystemBoundary.ValidateManagedPath(_root, destination)))
+        {
+            if (!FileSystemBoundary.ReadBoundedFile(destination, MaximumProposalBytes).AsSpan().SequenceEqual(bytes))
+                throw InvalidProposal("同じ依頼番号の内容が異なります。元の提案を確認してください。");
+            return;
+        }
+        AtomicWrite(destination, bytes, false);
+    }
+
+    public string InboxPath => Path.Combine(_root, "codex-inbox");
+    public string CategoryCatalogPath => Path.Combine(_root, "codex-bridge", "categories.json");
+    public string DelegationsPath => Path.Combine(_root, "codex-bridge", "delegations");
 
     public void WriteCategoryCatalog(IReadOnlyList<CategorySummary> categories)
     {
         try
         {
+            EnsureDirectory(InboxPath);
+            EnsureDirectory(DelegationsPath);
             var byId = categories.ToDictionary(item => item.Id, StringComparer.Ordinal);
             var catalog = new
             {
                 FormatVersion = 1,
+                EnvironmentId = Location.EnvironmentId,
+                ExchangeGeneration = Location.Generation,
                 GeneratedAt = UtcNow(),
                 Categories = categories.Select(item => new
                 {
@@ -73,6 +99,8 @@ public sealed class CodexProposalFiles
         }
         try
         {
+            EnsureDirectory(InboxPath);
+            EnsureDirectory(DelegationsPath);
             var byId = categories.ToDictionary(item => item.Id, StringComparer.Ordinal);
             var delegationId = Guid.CreateVersion7().ToString();
             var delegated = articles.Select(article =>
@@ -368,6 +396,9 @@ public sealed class CodexProposalFiles
             filename[..^ProposalSuffix.Length] != proposal.RequestId)
             throw InvalidProposal("Codex提案の受付番号とファイル名が一致しません。");
         ValidateProposal(proposal);
+        var location = Location;
+        if (location.Generation > 0 && (proposal.ExchangeGeneration != location.Generation || proposal.EnvironmentId != location.EnvironmentId))
+            throw CodexLocationService.Problem("旧版プラグインまたは切替前の依頼からの提案です。現在の連携環境・世代を確認して再依頼してください。");
         return proposal;
     }
 

@@ -292,7 +292,7 @@ public sealed partial class KnowledgeDatabase
         return new SearchArticlePage(items, total, page, SearchPageSize);
     });
 
-    internal string RecordSearchLog(string query, string? categoryId, string scope, long resultCount) => ExecuteLocked(() =>
+    internal string RecordSearchLog(string query, string? categoryId, string scope, long resultCount, string? userId = null) => ExecuteLocked(() =>
     {
         if (!SearchScopes.IsValid(scope) || resultCount < 0)
         {
@@ -306,10 +306,11 @@ public sealed partial class KnowledgeDatabase
         var id = Guid.CreateVersion7().ToString();
         using var insert = _connection.CreateCommand();
         insert.CommandText = """
-            INSERT INTO search_logs(id, query_text, normalized_query, scope, category_id, result_count, created_at)
-            VALUES ($id, $query_text, $normalized_query, $scope, $category_id, $result_count, $created_at)
+            INSERT INTO search_logs(id, query_text, normalized_query, scope, category_id, result_count, created_at, user_id)
+            VALUES ($id, $query_text, $normalized_query, $scope, $category_id, $result_count, $created_at, $user_id)
             """;
         insert.Parameters.AddWithValue("$id", id);
+        insert.Parameters.AddWithValue("$user_id", (object?)userId ?? DBNull.Value);
         insert.Parameters.AddWithValue("$query_text", query.Trim());
         insert.Parameters.AddWithValue("$normalized_query", NormalizeSearchText(query));
         insert.Parameters.AddWithValue("$scope", scope);

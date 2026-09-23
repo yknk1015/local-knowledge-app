@@ -1,18 +1,20 @@
 $ErrorActionPreference = 'Stop'
 
 # Historical Trial function names are kept for build-script compatibility.
-# The single accepted payload is now the phase 17 C# 0.5.0 production release.
+# The single accepted payload is now the phase 17 C# 0.7.3 production release.
 function Get-CSharpTrialPackageMetadata {
     [ordered]@{
         formatVersion=1
         phase=17
-        version='0.5.0'
+        version='0.7.3'
+        schemaVersion=9
+        passwordRecovery='admin-single-use-key-16-characters'
         mode='csharp-production'
         runtime='win-x64-framework-dependent'
         dataRootIdentifier='jp.local.webknowledgesystem.csharp'
         dataRetention='retained-on-exit'
         initialFaqs='empty'
-        legacyBackupRestore='schema-1-through-7-staged'
+        legacyBackupRestore='schema-1-through-8-staged'
         restoreConfirmation='session-path-sha256-single-use'
         articleCompatibility='body-json-depth-128'
         codexJsonDepth=127
@@ -32,12 +34,12 @@ function Get-CSharpTrialPackageMetadata {
 function Assert-CSharpTrialReadme([string]$Text) {
     if ([string]::IsNullOrWhiteSpace($Text) -or $Text.Length -gt 65536) { throw 'Release description is missing or too large.' }
     $required = @(
-        '(?m)^KnowledgeApp C# 0\.5\.0 - production release - phase 17$',
+        '(?m)^KnowledgeApp C# 0\.7\.3 - production release - phase 17$',
         '(?m)^Production data root: %LOCALAPPDATA%\\jp\.local\.webknowledgesystem\.csharp$',
         '(?m)^First launch starts with no FAQ or proposal seeds\. Initial login: 0000 with a blank password\.$',
         '(?m)^Normal shutdown retains the database, images, settings, history, import/export state and Codex state\.$',
         '(?m)^Every launch requires login; login sessions and open FAQ tabs are not restored\.$',
-        '(?m)^Legacy backups with database schema 1 through 7 are verified and migrated in staging before restore\.$',
+        '(?m)^Legacy backups with database schema 1 through 8 are verified and migrated in staging before restore\.$',
         '(?m)^Restore requires a single-use confirmation bound to the login session, selected path and archive SHA-256; it expires after 10 minutes\.$',
         '(?m)^Article JSON supports depth 128; the C# request transport still has a 16 MiB limit\.$',
         '(?m)^Codex JSON supports at most 127 nested object/array containers, including the root; existing file size limits remain unchanged\.$',
@@ -49,7 +51,7 @@ function Assert-CSharpTrialReadme([string]$Text) {
         '(?m)^Interrupted restore is rolled back from a verified safety backup before normal use; invalid recovery state stops startup\.$',
         '(?m)^Requests exceeding 16 MiB UTF-8 or depth 144 are rejected before sending; unsaved input is retained\.$',
         '(?m)^C# is the development and operation primary for this user-approved small-scale cutover\.$',
-        '(?m)^Release authorization does not mean every final test, company-device check, installed-plugin interaction or code-signing review has passed\.$'
+        '(?m)^Release authorization does not mean every final test, target-device check, installed-plugin interaction or code-signing review has passed\.$'
     )
     $normalized = $Text.Replace("`r`n", "`n")
     foreach ($pattern in $required) {
@@ -80,6 +82,7 @@ function Assert-CSharpPackageNormalPath([string]$Path) {
 function Get-CSharpTrialBinaryPaths {
     @(
         'KnowledgeApp.CSharp.exe', 'KnowledgeApp.CSharp.dll', 'KnowledgeApp.CSharp.deps.json', 'KnowledgeApp.CSharp.runtimeconfig.json',
+        'KnowledgeApp.PathProbe.exe', 'KnowledgeApp.PathProbe.dll', 'KnowledgeApp.PathProbe.deps.json', 'KnowledgeApp.PathProbe.runtimeconfig.json',
         'KnowledgeApp.Data.dll', 'KnowledgeApp.Mail.dll', 'KnowledgeApp.Migration.dll',
         'Isopoh.Cryptography.Argon2.dll', 'Isopoh.Cryptography.Blake2b.dll', 'Isopoh.Cryptography.SecureArray.dll',
         'Microsoft.Data.Sqlite.dll', 'Microsoft.IO.RecyclableMemoryStream.dll', 'Microsoft.Maui.Graphics.dll',

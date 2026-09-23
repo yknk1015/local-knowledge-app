@@ -74,6 +74,12 @@ jobs:
       - name: Verify C# WebView trust boundary
         run: dotnet run --project src-csharp/KnowledgeApp.SecurityCheck/KnowledgeApp.SecurityCheck.csproj --configuration Release
 
+      - name: Verify real WebView2 login startup and resource completion without user databases
+        run: dotnet run --project src-csharp/KnowledgeApp.StartupCheck --configuration Release
+
+      - name: Verify startup preparation failure and early shutdown on synthetic data
+        run: dotnet run --project src-csharp/KnowledgeApp.StartupBenchmark --configuration Release -- --check
+
       - name: Verify synthetic production startup and crash recovery
         shell: pwsh
         run: |
@@ -96,6 +102,17 @@ jobs:
       - name: Verify C# packaged UI integrity
         run: dotnet run --project src-csharp/KnowledgeApp.UiBundleCheck/KnowledgeApp.UiBundleCheck.csproj --configuration Release
 
+      - name: Verify shared roles, transfers, recovery, storage and production HTTPS routes
+        run: dotnet run --project src-csharp/KnowledgeApp.SharedCheck --configuration Release
+
+      - name: Build the Windows shared server package
+        id: shared_package
+        shell: pwsh
+        run: |
+          $shared = & ./scripts/New-SharedServerPackage.ps1 | Select-Object -Last 1
+          if (-not $shared.archive) { throw 'Shared server package was not produced.' }
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "archive=$($shared.archive)`n", [Text.UTF8Encoding]::new($false))
+
       - name: Build and verify the primary C# release package
         id: csharp_package
         shell: pwsh
@@ -109,6 +126,14 @@ jobs:
 
       - name: Verify C# mail delegation boundary
         run: dotnet run --project src-csharp/KnowledgeApp.MailCheck/KnowledgeApp.MailCheck.csproj --configuration Release
+
+      - name: Build and verify the installation-free single executable
+        id: standalone_package
+        shell: pwsh
+        run: |
+          $standalone = & ./scripts/New-CSharpStandaloneExe.ps1 -OutputDirectory (Join-Path $env:RUNNER_TEMP 'KnowledgeApp-Standalone') -StartupBenchmarkAssembly ./src-csharp/KnowledgeApp.StartupBenchmark/bin/Release/net10.0-windows/KnowledgeApp.StartupBenchmark.dll | Select-Object -Last 1
+          if (-not $standalone.executable -or -not $standalone.verificationPassed -or -not $standalone.packagedLoginVerified) { throw 'Standalone executable verification failed.' }
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "executable=$($standalone.executable)`n", [Text.UTF8Encoding]::new($false))
 
       - name: Verify approved C# primary use does not mark pending final checks as passed
         run: dotnet run --project src-csharp/KnowledgeApp.MigrationGate/KnowledgeApp.MigrationGate.csproj --configuration Release -- dist
@@ -155,8 +180,10 @@ jobs:
       - name: Upload the primary C# Windows release artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: KnowledgeApp-CSharp-0.5.0-Windows-${{ github.sha }}
+          name: KnowledgeApp-CSharp-0.7.3-Windows-${{ github.sha }}
           path: |
             ${{ steps.csharp_package.outputs.archive }}
             ${{ steps.csharp_installer.outputs.installer }}
+            ${{ steps.shared_package.outputs.archive }}
+            ${{ steps.standalone_package.outputs.executable }}
           if-no-files-found: error

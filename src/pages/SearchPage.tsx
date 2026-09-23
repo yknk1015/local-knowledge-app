@@ -1,3 +1,4 @@
+import { usePermissions } from "../app/AuthContext";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { knowledgeApi, toAppError } from "../api/knowledgeApi";
@@ -131,13 +132,14 @@ function paginationItems(currentPage: number, totalPages: number): Array<number 
 }
 
 export function SearchPage() {
+  const { canEdit } = usePermissions();
   const { showTopCategoryInTitle } = useDisplaySettings();
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const submittedQuery = searchParams.get("q")?.trim() ?? "";
   const selectedCategory = searchParams.get("category") ?? "";
   const selectedScope = parseScope(searchParams.get("scope"));
-  const includeDrafts = searchParams.get("drafts") === "1";
+  const includeDrafts = canEdit && searchParams.get("drafts") === "1";
   const requestedPage = parsePage(searchParams.get("page"));
   const selectedSort = parseSort(searchParams.get("sort"));
   const returnTo = `${location.pathname}${location.search}`;
@@ -421,14 +423,14 @@ export function SearchPage() {
             </select>
             <strong>{categoryScopeLabel}</strong>
           </label>
-          <label className="toggle-label">
+          {canEdit && <label className="toggle-label">
             <input
               type="checkbox"
               checked={includeDrafts}
               onChange={(event) => setDraftVisibility(event.target.checked)}
             />
             下書き・廃止も含める
-          </label>
+          </label>}
           <button
             type="button"
             className="clear-filter-button"

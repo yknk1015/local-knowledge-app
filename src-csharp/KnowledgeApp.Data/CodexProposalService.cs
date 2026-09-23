@@ -12,13 +12,14 @@ public sealed class CodexProposalService
     public CodexProposalService(
         KnowledgeDatabase database,
         AuthenticationService authentication,
-        ArticleAttachmentService? attachments = null)
+        ArticleAttachmentService? attachments = null, Func<CodexLocation>? locationProvider = null)
     {
         _database = database;
+        _operationSync = database.OperationSync;
         _authentication = authentication;
         _attachments = attachments ?? new ArticleAttachmentService(
             Directory.GetParent(Path.GetDirectoryName(database.OpenInfo.DatabasePath)!)!.FullName);
-        _files = new CodexProposalFiles(database);
+        _files = new CodexProposalFiles(database, locationProvider);
     }
 
     // Host lifecycle hook, never exposed as an arbitrary path/file command.
@@ -33,7 +34,7 @@ public sealed class CodexProposalService
 
     public CodexProposalInbox ListProposals()
     {
-        _authentication.RequireUser();
+        _authentication.RequireEditor();
         lock (_operationSync)
         {
             _files.WriteCategoryCatalog(_database.ListCategories());
@@ -66,7 +67,8 @@ public sealed class CodexProposalService
 
     public AcceptCodexProposalResult AcceptProposal(AcceptCodexProposalInput input)
     {
-        var actor = _authentication.RequireUser();
+        var actor = _authentication.RequireEditor();
+        if (input.CreateProposedCategory) _authentication.RequireAdmin();
         RequireRequestId(input.RequestId);
         lock (_operationSync)
         {
@@ -129,7 +131,7 @@ public sealed class CodexProposalService
 
     public void RejectProposal(string requestId)
     {
-        _authentication.RequireUser();
+        _authentication.RequireEditor();
         RequireRequestId(requestId);
         lock (_operationSync)
         {
@@ -140,14 +142,14 @@ public sealed class CodexProposalService
 
     public void ReopenRejectedProposal(string requestId)
     {
-        _authentication.RequireUser();
+        _authentication.RequireEditor();
         RequireRequestId(requestId);
         lock (_operationSync) { _database.ReopenRejectedCodexProposal(requestId); }
     }
 
     public CodexDelegationResult CreateDelegation(CreateCodexDelegationInput input)
     {
-        _authentication.RequireUser();
+        _authentication.RequireEditor();
         if (!CodexProposalKinds.IsDelegation(input.Kind) || input.ArticleIds is null ||
             (input.Kind == CodexProposalKinds.Revise ? input.ArticleIds.Count != 1 : input.ArticleIds.Count is < 2 or > 10))
         {
@@ -174,19 +176,19 @@ public sealed class CodexProposalService
 
     public CodexMergePublicationContext? GetMergePublicationContext(string articleId)
     {
-        _authentication.RequireUser();
+        _authentication.RequireEditor();
         return _database.GetCodexMergePublicationContext(articleId);
     }
 
     public MarkCodexMergeSourcesResult MarkMergeSources(string articleId)
     {
-        _authentication.RequireUser();
+        _authentication.RequireEditor();
         lock (_operationSync) { return _database.MarkCodexMergeSources(articleId); }
     }
 
     public ArticleDetail ClearArticleMerge(string articleId)
     {
-        _authentication.RequireUser();
+        _authentication.RequireEditor();
         lock (_operationSync) { return _attachments.HydrateArticle(_database.ClearArticleMerge(articleId)); }
     }
 

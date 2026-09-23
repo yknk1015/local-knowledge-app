@@ -111,6 +111,13 @@ const hostCompletionCommands = new Set([
   "mark_codex_merge_sources",
   "clear_article_merge",
   "save_tag",
+  "issue_recovery_key",
+  "verify_recovery_key",
+  "complete_password_recovery",
+  "skip_recovery_setup",
+  "save_connection_settings",
+  "change_codex_location",
+  "select_storage_folder", "save_storage_folder", "check_storage_folder", "set_user_role",
 ]);
 
 function clearRequestTimeout(request: PendingRequest) {

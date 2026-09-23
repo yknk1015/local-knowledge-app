@@ -19,12 +19,12 @@ const TagsPage = lazy(() => import("../pages/TagsPage").then((module) => ({ defa
 const HistoryPage = lazy(() => import("../pages/HistoryPage").then((module) => ({ default: module.HistoryPage })));
 const JsonTransferPage = lazy(() => import("../pages/JsonTransferPage").then((module) => ({ default: module.JsonTransferPage })));
 
-function RequireAuth({ admin = false }: { admin?: boolean }) {
+function RequireAuth({ admin = false, editor = false }: { admin?: boolean; editor?: boolean }) {
   const { user, loading } = useAuth();
   const location = useLocation();
   if (loading) return <div className="page"><LoadingState label="ログイン状態を確認しています…" /></div>;
   if (!user) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
-  if (admin && user.role !== "admin") return <Navigate to="/search" replace />;
+  if ((admin && user.role !== "admin") || (editor && user.role !== "admin" && user.role !== "editor")) return <Navigate to="/search" replace />;
   return <Outlet />;
 }
 
@@ -36,17 +36,35 @@ export function App() {
         <Route element={<RequireAuth />}>
           <Route element={<AppShell />}>
             <Route path="/search" element={<SearchPage />} />
+            <Route element={<RequireAuth editor />}>
             <Route path="/articles/new" element={<ArticleEditorPage />} />
+            </Route>
             <Route path="/articles/:articleId" element={<ArticleDetailPage />} />
+            <Route element={<RequireAuth editor />}>
             <Route path="/articles/:articleId/edit" element={<ArticleEditorPage />} />
+            </Route>
+            <Route element={<RequireAuth admin />}>
             <Route path="/categories" element={<CategoriesPage />} />
+            </Route>
+            <Route element={<RequireAuth admin />}>
             <Route path="/synonyms" element={<SynonymsPage />} />
+            </Route>
+            <Route element={<RequireAuth admin />}>
             <Route path="/tags" element={<TagsPage />} />
+            </Route>
             <Route path="/history" element={<HistoryPage />} />
+            <Route element={<RequireAuth editor />}>
             <Route path="/manage" element={<ArticleManagementPage />} />
+            </Route>
+            <Route element={<RequireAuth admin />}>
             <Route path="/manage/csv-import" element={<CsvImportPage />} />
+            </Route>
+            <Route element={<RequireAuth admin />}>
             <Route path="/manage/json-transfer" element={<JsonTransferPage />} />
+            </Route>
+            <Route element={<RequireAuth editor />}>
             <Route path="/codex-proposals" element={<CodexProposalsPage />} />
+            </Route>
             <Route path="/settings" element={<SettingsPage />} />
             <Route element={<RequireAuth admin />}>
               <Route path="/users" element={<UsersPage />} />

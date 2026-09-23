@@ -7,7 +7,7 @@ public sealed partial class KnowledgeDatabase
 {
     private const long HistoryPageSize = 50;
 
-    internal SearchLogPage ListSearchLogs(ListSearchLogsInput input) => ExecuteLocked(() =>
+    internal SearchLogPage ListSearchLogs(ListSearchLogsInput input, string? userId = null) => ExecuteLocked(() =>
     {
         var (startAt, endBefore) = HistoryDateBounds(input.StartDate, input.EndDate);
         var normalizedQuery = NormalizeSearchText((input.Query ?? string.Empty).Trim());
@@ -16,13 +16,14 @@ public sealed partial class KnowledgeDatabase
         count.CommandText = """
             SELECT COUNT(*)
               FROM search_logs
-             WHERE ($normalized_query = '' OR normalized_query LIKE $like_query ESCAPE '\')
+             WHERE ($history_user IS NULL OR COALESCE(user_id, '00000000-0000-7000-8000-000000000000') = $history_user)
+               AND ($normalized_query = '' OR normalized_query LIKE $like_query ESCAPE '\')
                AND ($start_at IS NULL OR created_at >= $start_at)
                AND ($end_before IS NULL OR created_at < $end_before)
                AND ($zero_results_only = 0 OR result_count = 0)
             """;
         AddHistoryFilterParameters(
-            count, normalizedQuery, likeQuery, startAt, endBefore, input.ZeroResultsOnly);
+            count, userId, normalizedQuery, likeQuery, startAt, endBefore, input.ZeroResultsOnly);
         var total = Convert.ToInt64(count.ExecuteScalar(), CultureInfo.InvariantCulture);
         var page = ClampPage(input.Page, total);
         var offset = (page - 1) * HistoryPageSize;
@@ -33,7 +34,8 @@ public sealed partial class KnowledgeDatabase
                    search_log.scope, category.name, search_log.result_count, search_log.created_at
               FROM search_logs search_log
               LEFT JOIN categories category ON category.id = search_log.category_id
-             WHERE ($normalized_query = '' OR search_log.normalized_query LIKE $like_query ESCAPE '\')
+             WHERE ($history_user IS NULL OR COALESCE(search_log.user_id, '00000000-0000-7000-8000-000000000000') = $history_user)
+               AND ($normalized_query = '' OR search_log.normalized_query LIKE $like_query ESCAPE '\')
                AND ($start_at IS NULL OR search_log.created_at >= $start_at)
                AND ($end_before IS NULL OR search_log.created_at < $end_before)
                AND ($zero_results_only = 0 OR search_log.result_count = 0)
@@ -41,7 +43,7 @@ public sealed partial class KnowledgeDatabase
              LIMIT $limit OFFSET $offset
             """;
         AddHistoryFilterParameters(
-            command, normalizedQuery, likeQuery, startAt, endBefore, input.ZeroResultsOnly);
+            command, userId, normalizedQuery, likeQuery, startAt, endBefore, input.ZeroResultsOnly);
         command.Parameters.AddWithValue("$limit", HistoryPageSize);
         command.Parameters.AddWithValue("$offset", offset);
         var items = new List<SearchLogItem>();
@@ -55,7 +57,7 @@ public sealed partial class KnowledgeDatabase
         return new SearchLogPage(items, total, page, HistoryPageSize);
     });
 
-    internal ViewLogPage ListViewLogs(ListViewLogsInput input) => ExecuteLocked(() =>
+    internal ViewLogPage ListViewLogs(ListViewLogsInput input, string? userId = null, bool publicOnly = false) => ExecuteLocked(() =>
     {
         var (startAt, endBefore) = HistoryDateBounds(input.StartDate, input.EndDate);
         var normalizedQuery = NormalizeSearchText((input.Query ?? string.Empty).Trim());
@@ -66,12 +68,15 @@ public sealed partial class KnowledgeDatabase
               FROM view_logs view_log
               JOIN articles article ON article.id = view_log.article_id
               LEFT JOIN search_logs search_log ON search_log.id = view_log.source_search_log_id
-             WHERE ($normalized_query = '' OR article.normalized_title LIKE $like_query ESCAPE '\'
+             WHERE ($public_only = 0 OR (article.status = 'published' AND article.is_hidden = 0 AND article.deleted_at IS NULL AND NOT EXISTS(SELECT 1 FROM article_merge_relations r WHERE r.source_article_id = article.id)))
+               AND ($history_user IS NULL OR COALESCE(view_log.user_id, '00000000-0000-7000-8000-000000000000') = $history_user)
+               AND ($normalized_query = '' OR article.normalized_title LIKE $like_query ESCAPE '\'
                     OR search_log.normalized_query LIKE $like_query ESCAPE '\')
                AND ($start_at IS NULL OR view_log.viewed_at >= $start_at)
                AND ($end_before IS NULL OR view_log.viewed_at < $end_before)
             """;
-        AddHistoryFilterParameters(count, normalizedQuery, likeQuery, startAt, endBefore, null);
+        AddHistoryFilterParameters(count, userId, normalizedQuery, likeQuery, startAt, endBefore, null);
+        count.Parameters.AddWithValue("$public_only", publicOnly ? 1 : 0);
         var total = Convert.ToInt64(count.ExecuteScalar(), CultureInfo.InvariantCulture);
         var page = ClampPage(input.Page, total);
         var offset = (page - 1) * HistoryPageSize;
@@ -82,17 +87,20 @@ public sealed partial class KnowledgeDatabase
               FROM view_logs view_log
               JOIN articles article ON article.id = view_log.article_id
               LEFT JOIN search_logs search_log ON search_log.id = view_log.source_search_log_id
-             WHERE ($normalized_query = '' OR article.normalized_title LIKE $like_query ESCAPE '\'
+             WHERE ($public_only = 0 OR (article.status = 'published' AND article.is_hidden = 0 AND article.deleted_at IS NULL AND NOT EXISTS(SELECT 1 FROM article_merge_relations r WHERE r.source_article_id = article.id)))
+               AND ($history_user IS NULL OR COALESCE(view_log.user_id, '00000000-0000-7000-8000-000000000000') = $history_user)
+               AND ($normalized_query = '' OR article.normalized_title LIKE $like_query ESCAPE '\'
                     OR search_log.normalized_query LIKE $like_query ESCAPE '\')
                AND ($start_at IS NULL OR view_log.viewed_at >= $start_at)
                AND ($end_before IS NULL OR view_log.viewed_at < $end_before)
              ORDER BY view_log.viewed_at DESC, view_log.id DESC
              LIMIT $limit OFFSET $offset
             """;
-        AddHistoryFilterParameters(command, normalizedQuery, likeQuery, startAt, endBefore, null);
+        AddHistoryFilterParameters(command, userId, normalizedQuery, likeQuery, startAt, endBefore, null);
         command.Parameters.AddWithValue("$limit", HistoryPageSize);
         command.Parameters.AddWithValue("$offset", offset);
         var items = new List<ViewLogItem>();
+        command.Parameters.AddWithValue("$public_only", publicOnly ? 1 : 0);
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {
@@ -103,7 +111,7 @@ public sealed partial class KnowledgeDatabase
         return new ViewLogPage(items, total, page, HistoryPageSize);
     });
 
-    internal long DeleteHistory(DeleteHistoryInput input) => ExecuteLocked(() =>
+    internal long DeleteHistory(DeleteHistoryInput input, string? userId = null) => ExecuteLocked(() =>
     {
         if (!input.DeleteAll && string.IsNullOrWhiteSpace(input.StartDate) && string.IsNullOrWhiteSpace(input.EndDate))
         {
@@ -124,13 +132,14 @@ public sealed partial class KnowledgeDatabase
         using var command = _connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = input.DeleteAll
-            ? $"DELETE FROM {table}"
-            : $"DELETE FROM {table} WHERE ($start_at IS NULL OR {timestamp} >= $start_at) AND ($end_before IS NULL OR {timestamp} < $end_before)";
+            ? $"DELETE FROM {table} WHERE ($history_user IS NULL OR COALESCE(user_id, '00000000-0000-7000-8000-000000000000') = $history_user)"
+            : $"DELETE FROM {table} WHERE ($history_user IS NULL OR COALESCE(user_id, '00000000-0000-7000-8000-000000000000') = $history_user) AND ($start_at IS NULL OR {timestamp} >= $start_at) AND ($end_before IS NULL OR {timestamp} < $end_before)";
         if (!input.DeleteAll)
         {
             command.Parameters.AddWithValue("$start_at", (object?)startAt ?? DBNull.Value);
             command.Parameters.AddWithValue("$end_before", (object?)endBefore ?? DBNull.Value);
         }
+        command.Parameters.AddWithValue("$history_user", (object?)userId ?? DBNull.Value);
         var deleted = command.ExecuteNonQuery();
         transaction.Commit();
         return deleted;
@@ -166,12 +175,14 @@ public sealed partial class KnowledgeDatabase
 
     private static void AddHistoryFilterParameters(
         SqliteCommand command,
+        string? userId,
         string normalizedQuery,
         string likeQuery,
         string? startAt,
         string? endBefore,
         bool? zeroResultsOnly)
     {
+        command.Parameters.AddWithValue("$history_user", (object?)userId ?? DBNull.Value);
         command.Parameters.AddWithValue("$normalized_query", normalizedQuery);
         command.Parameters.AddWithValue("$like_query", likeQuery);
         command.Parameters.AddWithValue("$start_at", (object?)startAt ?? DBNull.Value);

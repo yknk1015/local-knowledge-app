@@ -17,14 +17,14 @@ public sealed class HistoryService
     {
         _authentication.RequireUser();
         ValidateQuery(input.Query);
-        return _database.ListSearchLogs(input);
+        return _database.ListSearchLogs(input, _authentication.RequireUser().Id);
     }
 
     public ViewLogPage ListViewLogs(ListViewLogsInput input)
     {
         _authentication.RequireUser();
         ValidateQuery(input.Query);
-        return _database.ListViewLogs(input);
+        return _database.ListViewLogs(input, _authentication.RequireUser().Id, _authentication.RequireUser().Role == UserRoles.Viewer);
     }
 
     public long DeleteHistory(DeleteHistoryInput input)
@@ -36,7 +36,7 @@ public sealed class HistoryService
                 "削除する履歴の種類が正しくありません。",
                 "検索履歴または閲覧履歴を選び直してください。");
         }
-        return _database.DeleteHistory(input);
+        return _database.DeleteHistory(input, _authentication.RequireUser().Id);
     }
 
     private static void ValidateQuery(string? query)

@@ -69,6 +69,13 @@ if ($TestDataRoot) {
     }
     $dataRoot = $resolvedTestRoot
 }
+. ([scriptblock]::Create([IO.File]::ReadAllText((Join-Path $PSScriptRoot 'ExchangeLocation.Common.ps1'), [Text.UTF8Encoding]::new($false, $true))))
+$exchange = Open-KnowledgeExchange $dataRoot
+$dataRoot = $exchange.Root
+try {
+if ($exchange.Generation -gt 0 -and ($proposal.exchangeGeneration -ne $exchange.Generation -or $proposal.environmentId -cne $exchange.EnvironmentId)) {
+    throw '切替前の依頼または旧版プラグインの形式です。現在のカタログからenvironmentIdとexchangeGenerationを取得し、提案JSONへ含めてください。'
+}
 $inbox = Join-Path $dataRoot 'codex-inbox'
 if (-not (Test-Path -LiteralPath $inbox -PathType Container)) {
     throw 'KnowledgeApp C#版の提案箱がありません。C#版を一度起動してください。旧版の提案箱には送信しません。'
@@ -81,6 +88,7 @@ if (-not (Test-Path -LiteralPath $inbox -PathType Container)) {
 # evidence. This also avoids a PowerShell-version-specific -DateKind option.
 $target = Join-Path $inbox ($requestId.ToString() + '.knowledge-proposal.json')
 if (Test-Path -LiteralPath $target) { throw '同じ受付番号の提案がすでにあります。新しいrequestIdで再作成してください。' }
+[void](Assert-KnowledgeExchangePath $target)
 $partial = $target + '.' + [Guid]::NewGuid().ToString() + '.partial'
 
 try {
@@ -92,4 +100,6 @@ finally {
 }
 
 Write-Output ('KnowledgeAppの確認待ち提案へ送信しました。受付番号: ' + $requestId.ToString())
+
+} finally { if ($null -ne $exchange.Lease) { $exchange.Lease.Dispose() } }
 }

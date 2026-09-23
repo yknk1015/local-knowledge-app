@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   open: vi.fn(),
   save: vi.fn(),
   getSystemInfo: vi.fn(),
+    getStorageFolders: vi.fn().mockResolvedValue([]),
   getBackupOverview: vi.fn(),
   getPasswordPolicy: vi.fn(),
   savePasswordPolicy: vi.fn(),
@@ -45,7 +46,11 @@ vi.mock("../api/knowledgeApi", async (importOriginal) => {
   return {
     ...original,
     knowledgeApi: {
+      getRecoveryKeyStatus: vi.fn().mockResolvedValue({ hasKey: false, needsSetup: false, issuedAt: null }),
       getSystemInfo: mocks.getSystemInfo,
+      getStorageFolders: mocks.getStorageFolders,
+      getConnectionSettings: vi.fn().mockResolvedValue({ settings: null, activeShared: false }),
+      getCodexLocation: vi.fn().mockResolvedValue({ root: "", generation: 0 }),
       getBackupOverview: mocks.getBackupOverview,
       getPasswordPolicy: mocks.getPasswordPolicy,
       savePasswordPolicy: mocks.savePasswordPolicy,
@@ -110,7 +115,7 @@ describe("SettingsPage backup operations", () => {
       renderPage();
       fireEvent.click(await screen.findByRole("button", { name: "バックアップから復元" }));
       const note = await screen.findByRole("note", { name: "旧版バックアップの移行" });
-      expect(note).toHaveTextContent(`DB第${version}版を第7版へ移行して復元します。`);
+      expect(note).toHaveTextContent(`DB第${version}版を第8版へ移行して復元します。`);
       expect(note).toHaveTextContent("元のバックアップは変更しません。");
       expect(note).toHaveTextContent(version < 6 ? "利用者機能がない旧版" : "既存の利用者・パスワードを引き継ぎます");
       fireEvent.click(screen.getByRole("button", { name: "この内容を復元" }));

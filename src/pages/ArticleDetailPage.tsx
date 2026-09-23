@@ -1,3 +1,4 @@
+import { usePermissions } from "../app/AuthContext";
 import { useCallback, useEffect, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { knowledgeApi, toAppError } from "../api/knowledgeApi";
@@ -32,6 +33,7 @@ function relatedStatus(article: Article["relatedArticles"][number]): string {
 }
 
 export function ArticleDetailPage() {
+  const { isAdmin, canEdit } = usePermissions();
   const { articleId = "" } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
@@ -180,9 +182,9 @@ export function ArticleDetailPage() {
             <div><dt>削除日時</dt><dd>{new Date(article.deletedAt).toLocaleString("ja-JP")}</dd></div>
           </dl>
           <div className="deleted-article-actions">
-            <button type="button" className="button primary large" disabled={actionBusy} onClick={() => void restoreArticle()}>
+            {isAdmin && <button type="button" className="button primary large" disabled={actionBusy} onClick={() => void restoreArticle()}>
               {actionBusy ? "復元しています…" : "このFAQを復元"}
-            </button>
+            </button>}
             {article.mergeInfo && (
               <button type="button" className="button secondary large" disabled={actionBusy} onClick={() => void clearMerge()}>
                 統合を解除
@@ -198,7 +200,7 @@ export function ArticleDetailPage() {
     <article className="page article-detail">
       <div className="detail-actions">
         <Link to={returnTo} className="text-link">← 一覧へ戻る</Link>
-        <div className="detail-action-buttons">
+        {canEdit && <div className="detail-action-buttons">
           {!article.mergeInfo && (
             <button type="button" className="button secondary" disabled={actionBusy} onClick={() => void delegateRevision()}>
               Codexに推敲・修正を依頼
@@ -213,10 +215,10 @@ export function ArticleDetailPage() {
             {actionBusy ? "処理中…" : "複製して下書きを作る"}
           </button>
           <Link to={`/articles/${article.id}/edit`} className="button secondary">編集する</Link>
-          <button type="button" className="button danger-outline" disabled={actionBusy} onClick={() => void deleteArticle()}>
+          {isAdmin && <button type="button" className="button danger-outline" disabled={actionBusy} onClick={() => void deleteArticle()}>
             {actionBusy ? "処理中…" : "削除"}
-          </button>
-        </div>
+          </button>}
+        </div>}
       </div>
       {error && <ErrorState error={error} />}
       {notice && <div className="success-notice detail-notice" role="status">{notice}</div>}

@@ -1,9 +1,11 @@
+import { isSharedConnection } from "../utils/connectionMode";
 import type { ReactNode } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { FaqMascot } from "../components/FaqMascot";
 import { useDisplaySettings } from "./ColorTheme";
 import { useAuth } from "./AuthContext";
 import { FaqTabBar, FaqTabsProvider } from "./FaqTabs";
+import { RecoverySetupGate } from "../components/RecoveryKeyPanel";
 
 type IconName = "search" | "plus" | "sparkles" | "list" | "folder" | "tag" | "settings" | "check" | "users" | "history";
 
@@ -39,9 +41,12 @@ function AppIcon({ name }: { name: IconName }) {
 function AppShellContent() {
   const { showMascot, updateShowMascot } = useDisplaySettings();
   const { user, logout } = useAuth();
+  const permittedNav = navItems.filter(item =>
+    ["/search", "/history", "/settings"].includes(item.to) || user?.role === "admin" ||
+    (user?.role === "editor" && ["/articles/new", "/manage", "/codex-proposals"].includes(item.to)));
   const visibleNavItems = user?.role === "admin"
-    ? [...navItems, { to: "/users", label: "利用者の管理", icon: "users" as IconName }]
-    : navItems;
+    ? [...permittedNav, { to: "/users", label: "利用者の管理", icon: "users" as IconName }]
+    : permittedNav;
 
   return (
     <div className="app-shell">
@@ -54,9 +59,9 @@ function AppShellContent() {
           </span>
         </NavLink>
         <div className="topbar-account">
-          <div className="privacy-badge" title="FAQデータはこのPC内に保存されます">
+          <div className="privacy-badge" title={isSharedConnection() ? "FAQデータは共有サーバー内に保存されます" : "FAQデータはこのPC内に保存されます"}>
             <AppIcon name="check" />
-            ローカルに保存済み
+            {isSharedConnection() ? "共有サーバーに接続" : "ローカルに保存済み"}
           </div>
           <span className="signed-in-user">{user?.displayName}<small>{user?.loginId}</small></span>
           <button type="button" className="button secondary compact" onClick={() => void logout()}>ログアウト</button>
@@ -81,7 +86,7 @@ function AppShellContent() {
 
         <main className="main-content">
           <FaqTabBar />
-          <Outlet />
+          <RecoverySetupGate><Outlet /></RecoverySetupGate>
         </main>
         <FaqMascot visible={showMascot} onRequestHide={() => updateShowMascot(false)} />
       </div>

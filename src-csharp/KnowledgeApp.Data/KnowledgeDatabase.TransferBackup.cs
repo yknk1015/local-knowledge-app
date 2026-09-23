@@ -51,7 +51,7 @@ public sealed partial class KnowledgeDatabase
             var counts = ReadTransferBackupCounts();
             var manifest = new TransferBackupManifest(
                 1,
-                "0.4.4-csharp-migration",
+                SettingsService.CSharpAppVersion,
                 MigrationCatalog.CurrentVersion,
                 2,
                 DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture),

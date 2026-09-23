@@ -16,6 +16,13 @@ public partial class MainWindow : Window
     private KnowledgeDatabase? _database;
     private KnowledgeCommandDispatcher? _commandDispatcher;
     private AuthenticationService? _authentication;
+    private StorageSettingsService? _storageSettings;
+    private SharedHttpClient? _remote;
+    private string DeviceDataRoot => _syntheticRoot ?? (_production ? ProductionDataRoot.FixedPath : RehearsalDataRoot.FixedPath);
+    private readonly string? _syntheticRoot;
+    private readonly Func<KnowledgeDatabase>? _openSyntheticDatabase;
+    private readonly Action<string>? _startupStage;
+    private readonly Action<string>? _startupNotice;
     private TemporaryBrowserStorage? _temporaryBrowserStorage;
     private int _activeCriticalOperations;
     private long _documentGeneration;
@@ -38,7 +45,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         if (production)
         {
-            Title = "KnowledgeApp C# 0.5.0";
+            Title = "KnowledgeApp C# 0.7.3";
             ModeLabel.Text = "KnowledgeApp C#";
             ModeDescription.Text = "C#専用の保存先を使用しています。旧版からの引継ぎは「設定・情報」のフルバックアップ復元で行えます。";
             ModeBanner.Background = System.Windows.Media.Brushes.WhiteSmoke;
@@ -51,16 +58,41 @@ public partial class MainWindow : Window
 
     public bool CanReceiveActivation => !_shutdown.IsClosing && !_closed;
 
-    private void OpenMailImport_Click(object sender, RoutedEventArgs e)
+    // Available only to the named startup test assembly. Neither launch arguments
+    // nor the WebView bridge can choose a database path or enable measurements.
+    internal MainWindow(string syntheticRoot, Func<KnowledgeDatabase> openDatabase, Action<string> startupStage, Action<string> startupNotice)
+        : this(production: true)
     {
+        _syntheticRoot = FileSystemBoundary.ValidateSyntheticRoot(syntheticRoot);
+        _openSyntheticDatabase = openDatabase;
+        _startupStage = startupStage;
+        _startupNotice = startupNotice;
+    }
+
+    private async void OpenMailImport_Click(object sender, RoutedEventArgs e)
+    {
+        if (_remote is not null && !_shutdown.IsClosing && _bridgeDocumentReady)
+        {
+            try
+            {
+                var exchange = await _remote.PrepareCodexExchange();
+                var remoteWindow = new MailImportWindow(new KnowledgeApp.Mail.MailDelegationWriter(() => exchange), _production) { Owner = this };
+                remoteWindow.ShowDialog();
+            }
+            catch (Exception exception)
+            {
+                MessageBox.Show(this, exception is AppProblemException problem ? problem.Problem.Message : "共有先の権限と接続を確認してください。", "メール履歴", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            return;
+        }
         if (_database is null || _commandDispatcher is null || _shutdown.IsClosing || !_bridgeDocumentReady)
         {
             MessageBox.Show(this, "アプリの起動完了後に開いてください。", "メール履歴", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
-        if (_authentication?.GetCurrentUser() is null)
+        if (_authentication?.GetCurrentUser()?.Role is not (UserRoles.Admin or UserRoles.Editor))
         {
-            MessageBox.Show(this, "ログインしてからメール履歴を開いてください。", "メール履歴", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show(this, "管理者またはFAQ編集者でログインしてからメール履歴を開いてください。", "メール履歴", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
         var writer = _production
@@ -82,6 +114,7 @@ public partial class MainWindow : Window
         try
         {
             var uiRoot = ResolveUiRoot();
+            _startupStage?.Invoke("ui-verified");
             var runtimeAvailable = IsWebView2RuntimeAvailable();
             if (!runtimeAvailable)
             {
@@ -90,56 +123,72 @@ public partial class MainWindow : Window
                     "画面表示に必要なWebView2 Runtimeが見つかりません。",
                     "会社の導入ルールに従い、WebView2 Runtimeを確認してから起動してください。"));
             }
+            var environment = await CreateBrowserEnvironmentAsync();
+            if (_shutdown.IsClosing || _closed) return;
+            // Start the native browser before the synchronous database work. The
+            // browser stays on about:blank, with no bridge or navigation yet.
+            // Keep DB ownership on this UI thread so closing cannot race a late
+            // background database assignment after the shutdown deadline.
             var report = MigrationGateReport.Create(uiRoot, runtimeAvailable);
-            _database = _production ? KnowledgeDatabase.OpenProduction() : KnowledgeDatabase.OpenRehearsal();
-            var dataRoot = _production ? ProductionDataRoot.FixedPath : RehearsalDataRoot.FixedPath;
-            if (_production)
+            var dataRoot = DeviceDataRoot;
+            var browserInitialization = InitializeBrowserControlAsync(environment);
+            try
             {
-                report = report with { ProductionDataOpened = true };
-                report.Validate();
-            }
-            if (_database.RecoveredInterruptedRestore)
-                ModeDescription.Text = "前回の復元が中断されたため、復元前の状態へ自動で戻しました。必要ならバックアップを選び直してください。" + ModeDescription.Text;
-            var authentication = new AuthenticationService(_database);
-            _authentication = authentication;
-            var attachments = new ArticleAttachmentService(dataRoot);
-            var codex = new CodexProposalService(_database, authentication, attachments);
-            codex.RefreshCategoryCatalogBestEffort();
-            _commandDispatcher = new KnowledgeCommandDispatcher(
-                authentication,
-                new ClassificationSearchService(_database, authentication, codex.RefreshCategoryCatalogBestEffort),
-                new ArticleViewService(_database, authentication, attachments),
-                new ArticleEditingService(_database, authentication, attachments),
-                new HistoryService(_database, authentication),
-                new TransferService(_database, authentication, dataRoot),
-                new BackupService(_database, authentication, dataRoot, codex.RefreshCategoryCatalogBestEffort),
-                new SettingsService(_database, authentication, dataRoot),
-                codex,
-                SelectArticleImage,
-                SelectTransferSaveFile,
-                SelectTransferOpenFile,
-                Clipboard.SetText,
-                OpenExternalUrl);
+                var connection = SharedConnectionSettings.Read(dataRoot);
+                if (connection is not null)
+                {
+                    _remote = new SharedHttpClient(connection, dataRoot);
+                    // Remote entry points check the live administrator session before every use.
+                    _storageSettings = new StorageSettingsService(dataRoot, () => { });
+                    ModeLabel.Text = "KnowledgeApp 共有接続";
+                    ModeDescription.Text = $"共有先: {connection.Url}（DBと画像は共有サーバー内で管理します）";
+                }
+                else
+                {
+                    _database = _openSyntheticDatabase?.Invoke() ?? (_production ? KnowledgeDatabase.OpenProduction() : KnowledgeDatabase.OpenRehearsal());
+                    if (_production)
+                    {
+                        report = report with { ProductionDataOpened = true };
+                        report.Validate();
+                    }
+                    if (_database.RecoveredInterruptedRestore)
+                        ModeDescription.Text = "前回の復元が中断されたため、復元前の状態へ自動で戻しました。必要ならバックアップを選び直してください。" + ModeDescription.Text;
+                    var authentication = new AuthenticationService(_database);
+                    _authentication = authentication;
+                    _storageSettings = new StorageSettingsService(dataRoot, authentication);
+                    var attachments = new ArticleAttachmentService(dataRoot);
+                    CodexLocationService.ActivateLocal(dataRoot);
+                    var codex = new CodexProposalService(_database, authentication, attachments);
+                    codex.RefreshCategoryCatalogBestEffort();
+                    _commandDispatcher = new KnowledgeCommandDispatcher(
+                        authentication,
+                        new ClassificationSearchService(_database, authentication, codex.RefreshCategoryCatalogBestEffort),
+                        new ArticleViewService(_database, authentication, attachments),
+                        new ArticleEditingService(_database, authentication, attachments),
+                        new HistoryService(_database, authentication),
+                        new TransferService(_database, authentication, dataRoot),
+                        new BackupService(_database, authentication, dataRoot, codex.RefreshCategoryCatalogBestEffort),
+                        new SettingsService(_database, authentication, dataRoot),
+                        codex,
+                        SelectArticleImage,
+                        SelectTransferSaveFile,
+                        SelectTransferOpenFile,
+                        Clipboard.SetText,
+                        OpenExternalUrl,
+                        SelectStorageFolder);
+                }
 
-            // FAQ data is persistent; browser state is new for every process. Never
-            // pass dataRoot to the temporary-storage owner or shutdown cleanup.
-            _temporaryBrowserStorage = TemporaryBrowserStorage.Create();
-            var webViewDataRoot = _temporaryBrowserStorage.ProfileDirectory;
-            // Conservatively treat environment creation itself as potential UDF ownership.
-            // A close during CreateAsync must not assume that no browser resource exists.
-            _browserCreationStarted = true;
-            var environment = await CoreWebView2Environment.CreateAsync(userDataFolder: webViewDataRoot);
-            if (_closed) return;
-            if (!HostShutdownPolicy.IsExpectedProfileDirectory(environment.UserDataFolder, webViewDataRoot))
-            {
-                throw new AppProblemException(AppProblem.System(
-                    "ブラウザーの保存先が今回の起動用の一時フォルダーと一致しません。"));
+                _startupStage?.Invoke("data-ready");
             }
-            _webViewEnvironment = environment;
-            environment.BrowserProcessExited += OnBrowserProcessExited;
-            if (_shutdown.IsClosing) return;
-            await Browser.EnsureCoreWebView2Async(environment);
-            _webViewProcessId = Browser.CoreWebView2.BrowserProcessId;
+            catch
+            {
+                // Observe native startup even when DB/catalog preparation fails,
+                // so normal shutdown owns the browser PID and can release it.
+                // Preserve the original data error if both preparations failed.
+                try { await browserInitialization; } catch { }
+                throw;
+            }
+            await browserInitialization;
             if (_shutdown.IsClosing || _closed) return;
             Browser.CoreWebView2.Settings.AreDevToolsEnabled = false;
             Browser.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
@@ -147,18 +196,20 @@ public partial class MainWindow : Window
             Browser.CoreWebView2.Settings.AreHostObjectsAllowed = false;
             Browser.CoreWebView2.Settings.IsGeneralAutofillEnabled = false;
             Browser.CoreWebView2.Settings.IsPasswordAutosaveEnabled = false;
-            ConfigureHostSecurity(new HostResourceFiles(uiRoot, attachments.AttachmentsRoot, attachments.StagedFilesRoot));
+            ConfigureHostSecurity(new HostResourceFiles(uiRoot, Path.Combine(dataRoot, "attachments", "articles"), Path.Combine(dataRoot, "temp", "staged-article-images", "files")));
             Browser.CoreWebView2.WebMessageReceived += (_, args) => HandleWebMessage(args, report);
 
             var reportJson = HostResponseJson.Serialize(report);
             await Browser.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(
-                HostSecurityPolicy.BridgeInitializationScript(reportJson));
+                HostSecurityPolicy.BridgeInitializationScript(reportJson) +
+                (_remote is null ? "" : "if (window.__KNOWLEDGE_CSHARP_BRIDGE__) window.__KNOWLEDGE_SHARED__ = true;"));
             if (_shutdown.IsClosing || _closed) return;
 
             Browser.CoreWebView2.Navigate("https://app.knowledge.local/index.html#/search");
+            _startupStage?.Invoke("navigate");
             var pendingCount = report.Gates.Count(gate => gate.Required && !gate.Passed);
-            StatusText.Text = _production
-                ? "C# 0.5.0／本番用データ／起動前安全バックアップ作成済み"
+            StatusText.Text = _remote is not null ? "共有接続／サーバーの認証と権限を使用／通信断時のローカル切替なし" : _production
+                ? "C# 0.7.3／本番用データ／起動前安全バックアップ作成済み"
                 : $"C#検証用／継続確認 {pendingCount}項目／専用検証DB（終了後も保持）／本番データ未接続";
         }
         catch (Exception exception)
@@ -168,7 +219,8 @@ public partial class MainWindow : Window
             var safeMessage = exception is AppProblemException problem
                 ? $"{problem.Problem.Code}：{problem.Problem.Message}\n{problem.Problem.Action}"
                 : "SYS-001：必要なUIまたはC#専用DBを準備できませんでした。\nパッケージ全体とローカル保存先へのアクセスを確認してください。既存データは削除しないでください。";
-            MessageBox.Show(
+            if (_startupNotice is not null) _startupNotice(safeMessage);
+            else MessageBox.Show(
                 $"C#互換ホストを起動できませんでした。\n\n{safeMessage}",
                 "KnowledgeApp C#",
                 MessageBoxButton.OK,
@@ -181,6 +233,29 @@ public partial class MainWindow : Window
         {
             _initializationFinished.TrySetResult();
         }
+    }
+
+    private async Task<CoreWebView2Environment> CreateBrowserEnvironmentAsync()
+    {
+        // Every process owns a new disposable browser profile, never the FAQ root.
+        _temporaryBrowserStorage = TemporaryBrowserStorage.Create();
+        var profile = _temporaryBrowserStorage.ProfileDirectory;
+        _browserCreationStarted = true;
+        var environment = await CoreWebView2Environment.CreateAsync(userDataFolder: profile);
+        if (!HostShutdownPolicy.IsExpectedProfileDirectory(environment.UserDataFolder, profile))
+            throw new AppProblemException(AppProblem.System(
+                "ブラウザーの保存先が今回の起動用の一時フォルダーと一致しません。"));
+        _webViewEnvironment = environment;
+        environment.BrowserProcessExited += OnBrowserProcessExited;
+        _startupStage?.Invoke("environment-ready");
+        return environment;
+    }
+
+    private async Task InitializeBrowserControlAsync(CoreWebView2Environment environment)
+    {
+        await Browser.EnsureCoreWebView2Async(environment);
+        _webViewProcessId = Browser.CoreWebView2.BrowserProcessId;
+        _startupStage?.Invoke("webview-ready");
     }
 
     protected override void OnClosed(EventArgs e)
@@ -197,6 +272,7 @@ public partial class MainWindow : Window
         // disposals also cover a host shutdown that cannot be deferred by WPF.
         TryDisposeBrowser();
         TryDisposeDatabase();
+        _remote?.Dispose();
         _database = null;
         _temporaryBrowserStorage = null;
         base.OnClosed(e);
@@ -259,7 +335,8 @@ public partial class MainWindow : Window
             if (HostShutdownPolicy.NeedsResidualDataNotice(
                     _temporaryBrowserStorage is not null, cleanupSucceeded))
             {
-                MessageBox.Show(
+                if (_startupNotice is not null) _startupNotice("Browser temporary storage was retained.");
+                else MessageBox.Show(
                     "ブラウザーの終了または安全な削除を確認できなかったため、今回のブラウザー用一時データを残しました。\n" +
                     (_production
                         ? "本番用FAQの保存済みデータは保持されます。残るのは今回のブラウザー用一時領域です。アプリは終了します。"
@@ -360,14 +437,13 @@ public partial class MainWindow : Window
         HostResponse response;
         try
         {
-            var dispatcher = _commandDispatcher
-                ?? throw new AppProblemException(AppProblem.System("C#互換サービスを開始できませんでした。"));
+            var dispatcher = _commandDispatcher;
             var runsOnUiThread = request.Command is
-                "select_article_image" or "write_clipboard_text" or
+                "select_storage_folder" or "select_article_image" or "write_clipboard_text" or
                 "select_faq_csv_export_path" or "select_faq_csv_import_path" or
                 "select_json_export_path" or "select_json_import_path" or
                 "select_full_backup_destination" or "select_restore_backup_source";
-            var critical = HostOperationPolicy.PreventsWindowClose(request.Command);
+            var critical = (HostOperationPolicy.PreventsWindowClose(request.Command) || _remote is not null);
             if (critical)
             {
                 Interlocked.Increment(ref _activeCriticalOperations);
@@ -375,7 +451,21 @@ public partial class MainWindow : Window
             object? result;
             try
             {
-                result = runsOnUiThread
+                if (request.Command == "get_connection_settings")
+                    result = new { settings = SharedConnectionSettings.Read(DeviceDataRoot), activeShared = _remote is not null };
+                else if (request.Command == "save_connection_settings")
+                {
+                    if (_remote is null && _authentication?.GetCurrentUser() is not null) _authentication.RequireAdmin();
+                    if (_remote is not null && await _remote.Execute("get_current_user", JsonSerializer.SerializeToElement(new { })) is not null) await _remote.RequireRole(admin: true);
+                    var value = request.Args.GetProperty("input");
+                    var settings = value.ValueKind == JsonValueKind.Null ? null : value.Deserialize<SharedConnectionSettings>(new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+                    if (settings is not null) { using var candidate = new SharedHttpClient(settings); await candidate.VerifyServer(); }
+                    SharedConnectionSettings.Save(DeviceDataRoot, settings);
+                    result = new { restartRequired = true };
+                }
+                else if (_remote is not null) result = await ExecuteRemote(request.Command, request.Args);
+                else if (dispatcher is null) throw new AppProblemException(AppProblem.System("C#サービスを開始できませんでした。"));
+                else result = runsOnUiThread
                     ? dispatcher.Execute(request.Command, request.Args)
                     : await Task.Run(() => dispatcher.Execute(request.Command, request.Args));
             }
@@ -456,7 +546,7 @@ public partial class MainWindow : Window
         // resources ourselves so the allowlist and CSP also cover local application content.
         core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.All,
             CoreWebView2WebResourceRequestSourceKinds.All);
-        core.WebResourceRequested += (_, args) =>
+        core.WebResourceRequested += async (_, args) =>
         {
             var context = args.ResourceContext switch
             {
@@ -471,10 +561,16 @@ public partial class MainWindow : Window
             var resource = args.RequestedSourceKind == CoreWebView2WebResourceRequestSourceKinds.Document
                 ? HostSecurityPolicy.ResolveResource(args.Request.Uri, args.Request.Method, context)
                 : null;
+            // Dispose completes the WebView2 deferral. Calling Complete as well
+            // completes it twice and terminates the WPF host with 0x8000000E.
+            using var deferral = args.GetDeferral();
             try
             {
                 if (resource is null) throw new IOException("Resource is not permitted.");
-                var bytes = resources.Read(resource);
+                if (_remote is null && resource.Root == HostResourceRoot.Attachments)
+                    new ArticleViewService(_database!, _authentication!).RequireImageAccess(resource.RelativePath);
+                else if (_remote is null && resource.Root == HostResourceRoot.StagedImages) _authentication!.RequireEditor();
+                var bytes = _remote is not null && resource.Root != HostResourceRoot.Ui ? await _remote.ReadImage(resource) : resources.Read(resource);
                 var headers = $"Content-Type: {resource.ContentType}\r\n" +
                     "X-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\n" +
                     "Referrer-Policy: no-referrer\r\n" +
@@ -506,6 +602,77 @@ public partial class MainWindow : Window
         }
     }
 
+    private async Task<object?> ExecuteRemote(string command, JsonElement args)
+    {
+        var remote = _remote!;
+        if (command == "write_clipboard_text")
+        {
+            await remote.RequireRole();
+            Clipboard.SetText(ExternalInteractionValidator.ValidateClipboardText(args.GetProperty("text").GetString()!));
+            return null;
+        }
+        if (command == "open_external_url")
+        {
+            await remote.RequireRole();
+            OpenExternalUrl(ExternalInteractionValidator.ValidateExternalUrl(args.GetProperty("url").GetString()!));
+            return null;
+        }
+        if (command is "get_storage_folders" or "save_storage_folder" or "check_storage_folder")
+        {
+            await remote.RequireRole(admin: true);
+            return await Task.Run<object?>(() => command switch
+            {
+                "get_storage_folders" => _storageSettings!.GetFolders(),
+                "save_storage_folder" => _storageSettings!.Save(args.GetProperty("input").Deserialize<SaveStorageFolderInput>(new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase })!),
+                _ => _storageSettings!.Check(args.GetProperty("input").Deserialize<SaveStorageFolderInput>(new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase })!)
+            });
+        }
+        if (command.Contains("_server_storage_", StringComparison.Ordinal))
+            return await remote.Execute(command.Replace("_server_storage_", "_storage_", StringComparison.Ordinal), args);
+        if (command == "select_storage_folder") { await remote.RequireRole(admin: true); return SelectStorageFolder(); }
+        if (command == "select_server_backup_folder")
+        {
+            await remote.RequireRole(admin: true);
+            var text = Microsoft.VisualBasic.Interaction.InputBox("共有サーバーのWindowsから見たフォルダーパスを入力してください。ネットワーク共有はUNCパスを使用します。", "共有サーバーの保存先");
+            return string.IsNullOrWhiteSpace(text) ? null : text;
+        }
+        if (command == "select_article_image")
+        {
+            await remote.RequireRole(editor: true);
+            var path = SelectArticleImage();
+            if (path is null) return null;
+            FileSystemBoundary.ValidatePath(path);
+            var info = new FileInfo(path);
+            if (info.Length > 10 * 1024 * 1024) throw new AppProblemException(AppProblem.System("画像は10MB以内にしてください。"));
+            var bytes = await File.ReadAllBytesAsync(path);
+            return await remote.Execute("stage_article_image_bytes", JsonSerializer.SerializeToElement(new { input = new { originalName = info.Name, bytesBase64 = Convert.ToBase64String(bytes) } }));
+        }
+        if (command.StartsWith("select_", StringComparison.Ordinal))
+        {
+            await remote.RequireRole(admin: true);
+            return command switch
+            {
+                "select_faq_csv_export_path" => SelectTransferSaveFile("csv|" + args.GetProperty("defaultName").GetString()),
+                "select_json_export_path" => SelectTransferSaveFile("json|" + args.GetProperty("defaultName").GetString()),
+                "select_full_backup_destination" => SelectTransferSaveFile("backup|" + Path.GetFileName(args.GetProperty("defaultPath").GetString())),
+                "select_faq_csv_import_path" => SelectTransferOpenFile("csv"),
+                "select_json_import_path" => SelectTransferOpenFile("json"),
+                "select_restore_backup_source" => SelectTransferOpenFile("backup"),
+                _ => null
+            };
+        }
+        if (command.Contains("codex", StringComparison.Ordinal) || command == "clear_article_merge") return await remote.ExecuteCodex(command, args);
+        if (command is "export_faq_csv" or "inspect_faq_csv" or "import_faq_csv" or "export_json" or "inspect_json" or "import_json" or
+            "create_full_backup" or "inspect_backup" or "restore_backup") return await remote.ExecuteFile(command, args);
+        return await remote.Execute(command, args);
+    }
+
+    private static string? SelectStorageFolder()
+    {
+        var dialog = new OpenFolderDialog { Title = "リポジトリ外の保存先フォルダーを選択", Multiselect = false };
+        return dialog.ShowDialog() == true ? dialog.FolderName : null;
+    }
+
     private static string? SelectArticleImage()
     {
         var dialog = new OpenFileDialog
@@ -518,7 +685,7 @@ public partial class MainWindow : Window
         return dialog.ShowDialog() == true ? dialog.FileName : null;
     }
 
-    private static string? SelectTransferSaveFile(string request)
+    private string? SelectTransferSaveFile(string request)
     {
         var separator = request.IndexOf('|', StringComparison.Ordinal);
         if (separator <= 0 || separator == request.Length - 1)
@@ -546,14 +713,14 @@ public partial class MainWindow : Window
                 _ => "KnowledgeApp JSON|*.knowledge-export.json"
             },
             FileName = requestedPath is null ? defaultName : Path.GetFileName(requestedPath),
-            InitialDirectory = requestedPath is null ? string.Empty : Path.GetDirectoryName(requestedPath),
+            InitialDirectory = _storageSettings?.ResolveForDialog($"{kind}-export", requestedPath is null ? null : Path.GetDirectoryName(requestedPath)) ?? string.Empty,
             AddExtension = true,
             OverwritePrompt = !isBackup
         };
         return dialog.ShowDialog() == true ? dialog.FileName : null;
     }
 
-    private static string? SelectTransferOpenFile(string kind)
+    private string? SelectTransferOpenFile(string kind)
     {
         var dialog = new OpenFileDialog
         {
@@ -569,6 +736,7 @@ public partial class MainWindow : Window
                 "backup" => "KnowledgeAppフルバックアップ|*.faqbackup",
                 _ => "KnowledgeApp JSON|*.knowledge-export.json"
             },
+            InitialDirectory = _storageSettings?.ResolveForDialog($"{kind}-import") ?? string.Empty,
             Multiselect = false,
             CheckFileExists = true
         };

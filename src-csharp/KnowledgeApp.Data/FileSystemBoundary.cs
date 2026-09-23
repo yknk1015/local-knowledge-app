@@ -23,6 +23,12 @@ public static class FileSystemBoundary
     public static string ValidateManagedDataRoot(string path)
     {
         var full = ValidatePath(path, allowUnc: false);
+        if (string.Equals(full, SharedDataRoot.FixedPath, StringComparison.OrdinalIgnoreCase))
+        {
+            SharedDataRoot.Validate(full);
+            ProductionDataRoot.ValidateExistingLayout(full);
+            return full;
+        }
         if (string.Equals(full, ProductionDataRoot.FixedPath, StringComparison.OrdinalIgnoreCase))
         {
             ProductionDataRoot.ValidateFixedPath(full);

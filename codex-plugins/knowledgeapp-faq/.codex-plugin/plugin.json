@@ -1,6 +1,6 @@
 {
   "name": "knowledgeapp-faq",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "KnowledgeApp向けの新規FAQ、既存FAQの修正、複数FAQの統合、明示委譲されたメール履歴のFAQ案を確認待ち提案として作成します。",
   "author": {
     "name": "KnowledgeApp contributors"

@@ -72,6 +72,7 @@ export function ArticleEditorPage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [tagMaster, setTagMaster] = useState<TagMasterItem[]>([]);
   const [title, setTitle] = useState("");
+  const [expectedRevision, setExpectedRevision] = useState<number | undefined>();
   const [categoryId, setCategoryId] = useState("");
   const [summary, setSummary] = useState("");
   const [bodyDoc, setBodyDoc] = useState<Record<string, unknown>>(EMPTY_DOCUMENT);
@@ -147,6 +148,7 @@ export function ArticleEditorPage() {
           return;
         }
         setTitle(article.title);
+        setExpectedRevision(article.revision);
         setCategoryId(article.categoryId);
         setSummary(article.summary);
         setBodyDoc(article.bodyDoc);
@@ -354,6 +356,7 @@ export function ArticleEditorPage() {
     try {
       const saved = await knowledgeApi.saveArticle({
         id: articleId,
+        expectedRevision,
         title: title.trim(),
         categoryId,
         summary: summary.trim(),
@@ -377,6 +380,7 @@ export function ArticleEditorPage() {
       unsavedChangesRef.current = false;
       stagedImageIdsRef.current.clear();
       setInitialStatus(saved.status);
+      setExpectedRevision(saved.revision);
       if (mergeContext && saved.status === "published" && !mergeContext.allSourcesMerged) {
         if (!mergeContext.canMarkMerged) {
           setError({
